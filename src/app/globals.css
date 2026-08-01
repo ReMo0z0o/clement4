@@ -1,0 +1,178 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Deux palettes nettement distinctes selon le rôle (§15). */
+  --color-keep-bg: #14100c;
+  --color-keep-panel: #1e1811;
+  --color-keep-stone: #3a3128;
+  --color-keep-stone-lit: #5b4c3c;
+  --color-keep-ember: #e8a13c;
+  --color-keep-ember-dim: #a56d24;
+
+  --color-siege-bg: #0a0d12;
+  --color-siege-panel: #121722;
+  --color-siege-stone: #242b36;
+  --color-siege-stone-lit: #3d4756;
+  --color-siege-steel: #7fd4e8;
+  --color-siege-steel-dim: #4a8a9c;
+
+  --color-danger: #e0503c;
+  --color-heart-gold: #f0c469;
+  --color-heart-red: #d8384f;
+  --color-parchment: #e8ddc8;
+
+  --font-display: ui-serif, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-hud: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-code: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: dark;
+  --role-bg: var(--color-keep-bg);
+  --role-panel: var(--color-keep-panel);
+  --role-accent: var(--color-keep-ember);
+  --role-accent-dim: var(--color-keep-ember-dim);
+  --role-stone: var(--color-keep-stone);
+}
+
+/* Le rôle bascule toute la page : on sait de quel côté on est de loin. */
+[data-role='invader'] {
+  --role-bg: var(--color-siege-bg);
+  --role-panel: var(--color-siege-panel);
+  --role-accent: var(--color-siege-steel);
+  --role-accent-dim: var(--color-siege-steel-dim);
+  --role-stone: var(--color-siege-stone);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--role-bg);
+  color: var(--color-parchment);
+  font-family: var(--font-hud);
+  overscroll-behavior: none;
+  transition: background-color 600ms ease;
+}
+
+/* Focus clavier toujours visible : plancher de qualité (§15). */
+:focus-visible {
+  outline: 2px solid var(--role-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-code {
+  font-family: var(--font-code);
+}
+
+/* Le code de session : énorme, espacé, dictable à voix haute. */
+.session-code {
+  font-family: var(--font-code);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  font-variant-ligatures: none;
+}
+
+.panel {
+  background: color-mix(in srgb, var(--role-panel) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--role-accent) 22%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.stone-button {
+  background: color-mix(in srgb, var(--role-stone) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--role-accent) 30%, transparent);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 80ms ease;
+}
+
+.stone-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--role-accent) 22%, var(--role-stone));
+  border-color: var(--role-accent);
+}
+
+.stone-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.stone-button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--role-accent) 30%, var(--role-stone));
+  border-color: var(--role-accent);
+  color: #fff;
+}
+
+@keyframes ember-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ember-pulse {
+  animation: ember-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.slide-up {
+  animation: slide-up 260ms ease-out both;
+}
+
+/* Hors gameplay, on respecte la préférence système (§15). */
+@media (prefers-reduced-motion: reduce) {
+  .ember-pulse,
+  .slide-up {
+    animation: none;
+  }
+  body {
+    transition: none;
+  }
+}
+
+canvas {
+  display: block;
+  image-rendering: auto;
+  touch-action: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--role-accent) 28%, transparent);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
