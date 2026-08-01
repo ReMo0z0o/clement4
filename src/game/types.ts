@@ -115,6 +115,12 @@ export interface TrapPlacement {
   facing: number;
 }
 
+export interface SensorPlacement {
+  id: number;
+  x: number;
+  y: number;
+}
+
 export interface DevicePlacement {
   id: number;
   kind: DeviceKind;
@@ -133,6 +139,8 @@ export interface BuildOrder {
   lockedDoors: number[];
   /** Index dans `plan.secretSpots`. */
   secretDoors: number[];
+  /** Les guets du Châtelain : trois détecteurs de passage. */
+  sensors?: SensorPlacement[];
   spent: number;
 }
 
@@ -201,6 +209,8 @@ export interface Actor {
   grappleTarget: Vec | null;
   /** Outil en cours d'incantation. */
   castKind: 'elixir' | null;
+  /** Prochaine seconde à laquelle l'arbalète peut tirer. */
+  crossbowReadyAt: number;
 }
 
 export interface TrapRuntime extends TrapPlacement {
@@ -240,6 +250,10 @@ export interface Entity {
   /** Cooldown interne (morsure du molosse). */
   nextActionAt?: number;
   angle?: number;
+  /** Carreau : rebonds restants. */
+  bounces?: number;
+  /** Carreau : instant de tir, pour l'immunité du tireur avant rebond. */
+  born?: number;
 }
 
 export interface Brazier {
@@ -307,6 +321,8 @@ export interface InputFrame {
   aim: number;
   gait: Gait;
   primary: boolean;
+  /** Tir d'arbalète (clic droit). Impulsion : ne vaut que pour un tick. */
+  secondary: boolean;
   parry: boolean;
   dodge: boolean;
   interact: boolean;
@@ -327,6 +343,7 @@ export function emptyInput(seq = 0): InputFrame {
     aim: 0,
     gait: 'normal',
     primary: false,
+    secondary: false,
     parry: false,
     dodge: false,
     interact: false,
@@ -390,6 +407,8 @@ export interface SnapshotSelf {
   toolUses: number[];
   toolCooldowns: number[];
   shieldHp: number;
+  /** Temps restant avant le prochain tir d'arbalète. */
+  crossbowCooldown: number;
 }
 
 export interface SnapshotOther {
@@ -436,6 +455,10 @@ export interface Snapshot {
   devices?: { id: number; kind: DeviceKind; x: number; y: number; ready: boolean; used: boolean }[];
   /** Réservé au Châtelain : ses propres pièges. */
   ownTraps?: { id: number; kind: TrapKind; x: number; y: number; state: string }[];
+  /** Réservé au Châtelain : ses guets et leur disponibilité. */
+  sensors?: { id: number; x: number; y: number; ready: boolean }[];
+  /** Réservé au Châtelain : dernier passage détecté par un guet. */
+  ping?: { x: number; y: number; age: number } | null;
   /** `null` tant que l'Envahisseur ne l'a pas trouvé. */
   heart: { x: number; y: number } | null;
   /**
@@ -470,6 +493,8 @@ export type GameEvent =
   | { k: 'blast'; x: number; y: number }
   | { k: 'death'; role: Role; x: number; y: number }
   | { k: 'scry'; on: boolean }
+  | { k: 'sensor'; x: number; y: number }
+  | { k: 'ricochet'; x: number; y: number }
   | { k: 'probe'; x: number; y: number }
   | { k: 'door'; x: number; y: number; open: boolean }
   | { k: 'replay'; trap: TrapKind; x: number; y: number };

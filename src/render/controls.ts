@@ -4,11 +4,11 @@
  * Vit côté rendu, jamais dans `src/game` : la simulation doit rester
  * exécutable dans un test Node, sans DOM (§18).
  *
- * Le schéma est symétrique entre les deux rôles, ce qui évite de réapprendre
- * les touches à chaque manche : **Espace maintenu est la grande touche des
+ * Le schéma est symétrique entre les deux rôles : même épée au clic gauche,
+ * même arbalète au clic droit — son carreau rebondit sur les murs, à manier
+ * avec respect dans un couloir. **Espace maintenu est la grande touche des
  * deux camps** — courir pour l'Envahisseur, entrer en Scrutation pour le
- * Châtelain. Aucun des deux ne peut faire les deux, la touche n'est donc
- * jamais ambiguë.
+ * Châtelain.
  *
  * Les déplacements acceptent WASD, ZQSD et les flèches : un joueur français ne
  * doit pas avoir à changer de clavier pour jouer.
@@ -22,10 +22,10 @@ export interface ControlSnapshot {
   aim: number;
   gait: Gait;
   primary: boolean;
-  parry: boolean;
   scry: boolean;
   interact: boolean;
   /** Impulsions consommées une seule fois. */
+  secondary: boolean;
   dodge: boolean;
   tool: number;
   device: number;
@@ -60,7 +60,7 @@ export class Controls {
   private keys = new Set<string>();
   private mouse: Vec = { x: 0, y: 0 };
   private primary = false;
-  private parry = false;
+  private pendingSecondary = false;
   private pendingDodge = false;
   private pendingTool = -1;
   private pendingDevice = -1;
@@ -96,7 +96,6 @@ export class Controls {
       // Perdre le focus ne doit pas laisser le personnage courir tout seul.
       this.keys.clear();
       this.primary = false;
-      this.parry = false;
     };
     const onMove = (e: PointerEvent) => {
       const rect = this.el.getBoundingClientRect();
@@ -105,12 +104,12 @@ export class Controls {
     const onDown = (e: PointerEvent) => {
       if (!this.enabled) return;
       if (e.button === 0) this.primary = true;
-      if (e.button === 2) this.parry = true;
+      // Clic droit : un carreau part. Une impulsion, pas un tir en rafale.
+      if (e.button === 2) this.pendingSecondary = true;
       this.el.focus();
     };
     const onUp = (e: PointerEvent) => {
       if (e.button === 0) this.primary = false;
-      if (e.button === 2) this.parry = false;
     };
     const onContext = (e: Event) => e.preventDefault();
 
@@ -138,7 +137,6 @@ export class Controls {
     if (!v) {
       this.keys.clear();
       this.primary = false;
-      this.parry = false;
     }
   }
 
@@ -193,13 +191,15 @@ export class Controls {
     }
 
     f.primary = this.primary;
-    f.parry = this.parry;
+    f.secondary = this.pendingSecondary;
+    f.parry = false;
     f.interact = this.keys.has('KeyE');
     f.dodge = this.pendingDodge;
     f.tool = this.pendingTool;
     f.device = this.pendingDevice;
     f.rearm = this.pendingRearm;
 
+    this.pendingSecondary = false;
     this.pendingDodge = false;
     this.pendingTool = -1;
     this.pendingDevice = -1;
@@ -224,23 +224,17 @@ export function controlHints(role: Role): { keys: string; label: string }[] {
   const common = [
     { keys: 'ZQSD / WASD', label: 'Se déplacer' },
     { keys: 'Souris', label: 'Viser' },
-    { keys: 'Clic gauche', label: 'Frapper' },
+    { keys: 'Clic gauche', label: 'Épée' },
+    { keys: 'Clic droit', label: 'Arbalète — le carreau rebondit' },
   ];
   if (role === 'invader') {
     return [
       ...common,
-      { keys: 'Clic droit', label: 'Parer (maintenu)' },
       { keys: 'Maj', label: 'Avancer prudemment (maintenu)' },
       { keys: 'Espace', label: 'Courir (maintenu)' },
       { keys: 'F', label: 'Esquiver' },
       { keys: 'E', label: 'Allumer un brasero' },
-      { keys: '1 2 3', label: 'Outils' },
     ];
   }
-  return [
-    ...common,
-    { keys: 'Espace', label: 'Scrutation (maintenu)' },
-    { keys: 'Clic en Scrutation', label: 'Déclencher un mécanisme' },
-    { keys: 'E', label: 'Interagir' },
-  ];
+  return [...common, { keys: 'Espace', label: 'Scrutation (maintenu)' }];
 }

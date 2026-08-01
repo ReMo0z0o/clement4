@@ -660,6 +660,26 @@ export class AudioEngine {
       case 'death':
         this.death(e.role, { x: e.x, y: e.y });
         break;
+      case 'sensor': {
+        // Le guet du Châtelain : deux notes brèves, comme une clochette
+        // discrète. Non positionné : c'est un signal d'interface, le Châtelain
+        // l'entend où qu'il soit — l'indicateur à l'écran donne le lieu.
+        const b = this.begin(0.4, 0.5);
+        if (!b) break;
+        this.ring(b, b.t, 1040, 0.2, 0.16, 5);
+        this.ring(b, b.t + 0.11, 1385, 0.16, 0.22, 5);
+        break;
+      }
+      case 'ricochet': {
+        // Claquement métallique bref, positionné : on suit le carreau à
+        // l'oreille dans un couloir.
+        const b = this.begin(0.3, 0.25, { x: e.x, y: e.y });
+        if (!b) break;
+        this.ring(b, b.t, 2400, 0.3, 0.05, 12);
+        this.grain(b, b.t, 3200, 0.2, 0.02);
+        break;
+      }
+
       case 'scry':
         this.scry(e.on);
         break;

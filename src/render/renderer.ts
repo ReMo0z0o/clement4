@@ -16,6 +16,7 @@ import type { ClientView } from '@/net/clientView';
 import type { GameEvent, Role, Snapshot, TellKind, Vec } from '@/game/types';
 import { T, angleDelta, clamp } from '@/game/types';
 import { Camera } from './camera';
+import { drawCharacter } from './sprites';
 import { drawTell, drawTellGlow, withAlpha } from './tells';
 
 // Un pixel de masque pour un quart de tuile : assez fin pour que la chute de
@@ -173,6 +174,9 @@ export class Renderer {
         case 'brazier':
           this.burst(e.x, e.y, 26, '#f0c469', 70);
           break;
+        case 'ricochet':
+          this.burst(e.x, e.y, 7, '#cfe4ec', 150);
+          break;
         case 'breach':
           this.camera.kick(7);
           this.burst(e.x, e.y, 30, '#d8384f', 110);
@@ -248,6 +252,7 @@ export class Renderer {
     this.drawHeart(snap, pal);
     this.drawBraziers(snap, pal);
     this.drawTells(view, pal);
+    this.drawSensors(snap, pal, role);
     this.drawWalls(view, pal);
     this.drawEntities(view, pal);
     this.drawActors(view, pal, role, scrying);
@@ -626,6 +631,67 @@ export class Renderer {
     }
   }
 
+  /**
+   * Les guets du Châtelain et, s'il y en a un, le dernier passage détecté.
+   * Rien de tout cela n'existe côté Envahisseur : l'hôte ne le transmet pas.
+   */
+  private drawSensors(snap: Snapshot | null, pal: Palette, role: Role): void {
+    if (!snap || role !== 'castellan') return;
+    const ctx = this.ctx;
+
+    for (const g of snap.sensors ?? []) {
+      const px = g.x * TILE;
+      const py = g.y * TILE;
+      ctx.save();
+      // L'œil du guet : une pupille dorée dans un anneau — éteinte en recharge.
+      ctx.globalAlpha = g.ready ? 0.95 : 0.35;
+      ctx.strokeStyle = pal.accent;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(px, py, 6.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = g.ready ? pal.accent : pal.accentDim;
+      ctx.beginPath();
+      ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      if (g.ready) {
+        const breathe = 0.5 + 0.5 * Math.sin(this.time * 2.2 + g.id * 2);
+        ctx.globalAlpha = 0.14 + breathe * 0.1;
+        ctx.beginPath();
+        ctx.arc(px, py, CFG.sensors.radius * TILE, 0, Math.PI * 2);
+        ctx.setLineDash([4, 8]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+
+    const ping = snap.ping;
+    if (ping) {
+      const px = ping.x * TILE;
+      const py = ping.y * TILE;
+      const k = 1 - ping.age / CFG.sensors.pingDuration;
+      ctx.save();
+      // Des anneaux qui s'élargissent depuis le point de passage : « il est
+      // passé là », pas « il est là » — la position date déjà.
+      for (let i = 0; i < 3; i++) {
+        const t = (this.time * 0.9 + i / 3) % 1;
+        ctx.globalAlpha = (1 - t) * 0.5 * k;
+        ctx.strokeStyle = '#e0503c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px, py, 6 + t * 26, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.9 * k;
+      ctx.fillStyle = '#e0503c';
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   private drawEntities(view: ClientView, pal: Palette): void {
     const ctx = this.ctx;
     for (const e of view.entityViews()) {
@@ -757,24 +823,26 @@ export class Renderer {
       ctx.globalAlpha = alpha;
     }
 
-    // Le Châtelain est plus large et plus lourd ; l'Envahisseur plus étroit.
-    ctx.fillStyle = who === 'castellan' ? '#3b2d1e' : '#1b2430';
-    ctx.beginPath();
-    if (who === 'castellan') ctx.ellipse(0, 0, r * 1.16, r * 1.02, 0, 0, Math.PI * 2);
-    else ctx.ellipse(0, 0, r * 1.02, r * 0.9, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.restore();
 
-    // Le regard : un joueur doit savoir où l'autre fait face en un coup d'œil.
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(r * 1.35, 0);
-    ctx.lineTo(r * 0.35, -r * 0.55);
-    ctx.lineTo(r * 0.35, r * 0.55);
-    ctx.closePath();
-    ctx.fill();
+    // Le corps : le chevalier à cape bleue ou le rôdeur encapuchonné, en
+    // pixel-art, tournés vers la visée. Le balancement de marche suit le temps.
+    const moving = state === 'move' || state === 'dodge';
+    drawCharacter(
+      ctx,
+      who,
+      px,
+      py,
+      aim,
+      r * 3.4,
+      moving ? this.time * 11 : 0,
+      alpha,
+    );
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(px, py);
+    ctx.rotate(aim);
 
     if (state === 'windup') {
       // L'attaque est télégraphiée : c'est ce qui rend la parade jouable.

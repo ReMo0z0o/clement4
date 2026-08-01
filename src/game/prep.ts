@@ -40,7 +40,16 @@ export interface Verdict {
 }
 
 export function emptyBuild(planId: PlanId): BuildOrder {
-  return { planId, heartIndex: 0, traps: [], devices: [], lockedDoors: [], secretDoors: [], spent: 0 };
+  return {
+    planId,
+    heartIndex: 0,
+    traps: [],
+    devices: [],
+    lockedDoors: [],
+    secretDoors: [],
+    sensors: [],
+    spent: 0,
+  };
 }
 
 export function emptyLoadout(): Loadout {
@@ -121,6 +130,26 @@ export function canPlaceDevice(
   }
   for (const d of devices) {
     if (Math.floor(d.x) === tx && Math.floor(d.y) === ty) return 'Il y a déjà quelque chose ici.';
+  }
+  return null;
+}
+
+/** Un guet se pose sur du sol dégagé, loin de l'entrée de l'Envahisseur. */
+export function canPlaceSensor(
+  plan: CastlePlan,
+  x: number,
+  y: number,
+  existing: { x: number; y: number }[],
+): string | null {
+  const tx = Math.floor(x);
+  const ty = Math.floor(y);
+  if (!inBounds(tx, ty)) return 'Hors du château.';
+  if (plan.tiles[idx(tx, ty)] !== T.FLOOR) return 'Il faut du sol dégagé.';
+  if (dist({ x: tx + 0.5, y: ty + 0.5 }, plan.invaderSpawn) < 3) {
+    return "Trop près de l'entrée de l'Envahisseur.";
+  }
+  for (const g of existing) {
+    if (Math.floor(g.x) === tx && Math.floor(g.y) === ty) return 'Il y a déjà un guet ici.';
   }
   return null;
 }
@@ -229,6 +258,21 @@ export function sanitizeBuild(
     if (spent + CFG.fixtures.secretDoor.cost > budget) continue;
     out.secretDoors.push(si);
     spent += CFG.fixtures.secretDoor.cost;
+  }
+
+  // Les guets : gratuits, mais jamais plus que le compte, jamais dans un mur.
+  for (const g of raw.sensors ?? []) {
+    if ((out.sensors?.length ?? 0) >= CFG.sensors.count) {
+      problems.push('Guet retiré : trois au maximum.');
+      continue;
+    }
+    if (!Number.isFinite(g.x) || !Number.isFinite(g.y)) continue;
+    const why = canPlaceSensor(plan, g.x, g.y, out.sensors ?? []);
+    if (why) {
+      problems.push(`Guet retiré : ${why.toLowerCase()}`);
+      continue;
+    }
+    out.sensors!.push({ id: out.sensors!.length, x: Math.floor(g.x) + 0.5, y: Math.floor(g.y) + 0.5 });
   }
 
   out.spent = spent;

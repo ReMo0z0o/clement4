@@ -28,8 +28,8 @@ export const CFG = {
   /* Rythme du match (§3)                                               */
   /* ------------------------------------------------------------------ */
   match: {
-    prepBuild: 75, // manches 1 et 2 — construction
-    prepRedress: 40, // manches 3 et 4 — réaménagement
+    prepBuild: 40, // manches 1 et 2 — poser ses guets et son Cœur
+    prepRedress: 25, // manches 3 et 4 — réaménagement
     prepTiebreak: 30, // manche décisive
     roundDuration: 180,
     tiebreakDuration: 120,
@@ -168,13 +168,15 @@ export const CFG = {
       recovery: 0.5,
       knockback: 0.5,
     },
+    // Identique à l'épée de l'Envahisseur : les deux camps portent la même
+    // lame, l'avantage du Châtelain vient du terrain, pas de l'acier.
     castellanBlade: {
-      damage: 20,
-      range: 1.15,
+      damage: 25,
+      range: 1.2,
       arc: Math.PI / 2,
-      windup: 0.25, // plus lent, plus télégraphié : il perd un duel loyal
-      recovery: 0.7,
-      knockback: 0.35,
+      windup: 0.12,
+      recovery: 0.5,
+      knockback: 0.5,
     },
     parry: {
       reduction: 0.7,
@@ -191,13 +193,34 @@ export const CFG = {
       distance: 1.9, // tuiles
       cooldown: 3,
     },
+    // L'arbalète est l'arme de base des DEUX camps. Son carreau rebondit sur
+    // les murs jusqu'à trois fois : un tir raté continue de vivre dans le
+    // couloir — y compris pour celui qui l'a tiré.
     crossbow: {
-      damage: 55,
-      speed: 15, // tuiles/s — visible et esquivable
+      damage: 40,
+      speed: 13, // tuiles/s — visible et esquivable
       reload: 2.5,
       windup: 0.2,
-      range: 14,
+      bounces: 3,
+      /** Durée de vie d'un carreau, en secondes. */
+      lifetime: 2.6,
+      /** Avant le premier rebond, le tireur est immunisé ce court instant. */
+      selfGrace: 0.25,
     },
+  },
+
+  /* ------------------------------------------------------------------ */
+  /* Guets du Châtelain : trois détecteurs posés à la préparation        */
+  /* ------------------------------------------------------------------ */
+  sensors: {
+    count: 3,
+    /** Rayon de détection, en tuiles. */
+    radius: 3.4,
+    /** Un guet déclenché se tait ce temps avant de pouvoir resonner. */
+    cooldown: 6,
+    /** Durée d'affichage de l'indicateur chez le Châtelain. */
+    pingDuration: 6,
+    label: 'Guet',
   },
 
   /* ------------------------------------------------------------------ */

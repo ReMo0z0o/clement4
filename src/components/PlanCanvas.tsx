@@ -12,12 +12,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { CFG, GRID_H, GRID_W } from '@/game/config';
 import { getPlan } from '@/game/plans';
-import { canPlaceDevice, canPlaceTrap } from '@/game/prep';
+import { canPlaceDevice, canPlaceSensor, canPlaceTrap } from '@/game/prep';
 import type { BuildOrder, DeviceKind, PlanId, TellKind, TrapKind } from '@/game/types';
 import { T } from '@/game/types';
 import { drawTell } from '@/render/tells';
 
 export type Brush =
+  | { kind: 'sensor' }
   | { kind: 'trap'; trap: TrapKind; tell: TellKind }
   | { kind: 'device'; device: DeviceKind }
   | { kind: 'heart' }
@@ -184,6 +185,30 @@ export function PlanCanvas({
       ctx.restore();
     });
 
+    /* --- Les guets --- */
+    for (const g of build.sensors ?? []) {
+      const px = g.x * CELL;
+      const py = g.y * CELL;
+      ctx.save();
+      ctx.strokeStyle = '#e8a13c';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(px, py, CELL * 0.34, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#e8a13c';
+      ctx.beginPath();
+      ctx.arc(px, py, CELL * 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      // Le rayon de détection : on doit voir ce que le guet couvre.
+      ctx.globalAlpha = 0.22;
+      ctx.setLineDash([3, 5]);
+      ctx.beginPath();
+      ctx.arc(px, py, CFG.sensors.radius * CELL, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
     /* --- Ce qui est posé --- */
     for (const t of build.traps) {
       const px = t.x * CELL;
@@ -257,6 +282,7 @@ export function PlanCanvas({
 
   const evaluate = (x: number, y: number): string | null => {
     const plan = getPlan(planId);
+    if (brush.kind === 'sensor') return canPlaceSensor(plan, x, y, build.sensors ?? []);
     if (brush.kind === 'trap') return canPlaceTrap(plan, brush.trap, x, y, build.traps, build.devices);
     if (brush.kind === 'device')
       return canPlaceDevice(plan, brush.device, x, y, build.traps, build.devices);

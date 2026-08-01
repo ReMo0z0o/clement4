@@ -48,7 +48,15 @@ export function GameView({
     const offEvents = engine.onEvents((events: GameEvent[]) => {
       const view = engine.view;
       renderer.onEvents(events, view ? view.render : { x: 0, y: 0 });
-      if (audio) for (const e of events) audio.play(e);
+      if (audio) {
+        for (const e of events) {
+          try {
+            audio.play(e);
+          } catch {
+            // Un son raté ne casse jamais une frame de jeu.
+          }
+        }
+      }
     });
 
     const frame = (now: number) => {
@@ -72,10 +80,10 @@ export function GameView({
         aim: f.aim,
         gait: f.gait,
         primary: f.primary,
-        parry: f.parry,
         interact: f.interact,
         scry: f.scry,
       });
+      if (f.secondary) engine.pulse({ secondary: true });
       if (f.dodge) engine.pulse({ dodge: true });
       if (f.tool >= 0) engine.pulse({ tool: f.tool });
       if (f.device >= 0) engine.pulse({ device: f.device });

@@ -8,7 +8,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { planList } from '@/game/plans';
 import type { PlanId } from '@/game/types';
 import { Engine, type EngineState } from '@/net/engine';
 import {
@@ -43,7 +42,6 @@ export function MatchShell() {
   const [transportKind, setTransportKind] = useState<TransportKind>(() =>
     supabaseConfigured() ? 'supabase' : 'local',
   );
-  const [plan, setPlan] = useState<PlanId | null>(null);
   const [isHost, setIsHost] = useState(true);
   const [waitingTooLong, setWaitingTooLong] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -80,6 +78,10 @@ export function MatchShell() {
         const e = new Engine(transport);
         e.subscribe(setState);
         e.start();
+        // Le château de chaque joueur est tiré au sort : un choix de moins
+        // avant de jouer, et une carte différente d'un match à l'autre.
+        const plans: PlanId[] = ['compact', 'labyrinth', 'open'];
+        e.setPlan(plans[Math.floor(Math.random() * plans.length)]);
         setEngine(e);
         setCode(sessionCode);
         setStatus('waiting');
@@ -191,13 +193,6 @@ export function MatchShell() {
           code={code}
           error={error}
           transportKind={transportKind}
-          plans={planList()}
-          selectedPlan={plan}
-          onSelectPlan={(id) => {
-            setPlan(id);
-            engine?.setPlan(id);
-            void audioRef.current?.ui('click');
-          }}
           isHost={isHost}
           waitingTooLong={waitingTooLong}
           onCancel={() => {

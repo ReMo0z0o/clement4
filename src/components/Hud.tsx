@@ -130,6 +130,17 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
         </div>
       )}
 
+      {/* L'arbalète : la seule recharge que les deux camps surveillent. */}
+      <div className="absolute bottom-[104px] right-5 text-right text-[11px] uppercase tracking-widest">
+        {snap.self.crossbowCooldown > 0.05 ? (
+          <span className="opacity-40">
+            Arbalète · {snap.self.crossbowCooldown.toFixed(1)} s
+          </span>
+        ) : (
+          <span className="text-[var(--role-accent)]">Arbalète prête — clic droit</span>
+        )}
+      </div>
+
       {/* Outils et recharges. */}
       {invader && state.loadout.tools.length > 0 && (
         <div className="absolute bottom-5 right-5 flex gap-2">
@@ -199,6 +210,19 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Le guet a sonné : le Châtelain sait où l'ennemi est passé. */}
+      {!invader && snap.ping && (
+        <div className="slide-up absolute left-1/2 top-24 -translate-x-1/2 rounded-sm border border-danger/60 bg-black/75 px-3 py-1.5 text-center">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-danger">
+            Un guet a sonné
+          </div>
+          <div className="mt-0.5 text-[11px] opacity-70">
+            Passage repéré {snap.ping.age < 1.5 ? 'à l’instant' : `il y a ${Math.round(snap.ping.age)} s`} —
+            le point rouge sur votre plan
+          </div>
         </div>
       )}
 

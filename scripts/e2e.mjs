@@ -70,9 +70,7 @@ if (!/adversaire est arrivé|adversaire est prêt/i.test(seen)) {
 }
 step('les deux joueurs sont connectés');
 
-// Chacun choisit son château, puis se déclare prêt.
-await host.getByRole('radio').nth(0).click();
-await guest.getByRole('radio').nth(1).click();
+// Plus rien à choisir : les deux se déclarent prêts, le château est tiré au sort.
 for (const p of [host, guest]) {
   await p.getByRole('button', { name: /^Je suis prêt$/ }).click();
   await p.waitForTimeout(250);
@@ -83,29 +81,27 @@ await shot(guest, '03-prep-invader');
 
 const prepHost = await host.innerText('body');
 const prepGuest = await guest.innerText('body');
-if (!/Budget de construction/i.test(prepHost)) problems.push('Le Châtelain n’a pas d’écran de construction.');
-if (!/Outils/i.test(prepGuest)) problems.push('L’Envahisseur n’a pas d’écran d’équipement.');
-step('préparation : le Châtelain construit, l’Envahisseur s’équipe');
+if (!/Guets posés/i.test(prepHost)) problems.push('Le Châtelain n’a pas son écran de guets.');
+if (!/Ce que vous savez/i.test(prepGuest)) problems.push('L’Envahisseur n’a pas son briefing.');
+step('préparation : le Châtelain pose ses guets, l’Envahisseur lit son briefing');
 
-// Le Châtelain pose quelques pièges sur son plan.
+// Le Châtelain pose ses trois guets sur le plan (pinceau par défaut).
 const planCanvas = host.locator('canvas').first();
 const box = await planCanvas.boundingBox();
 for (const [fx, fy] of [
   [0.45, 0.45],
-  [0.5, 0.42],
-  [0.42, 0.5],
+  [0.6, 0.3],
+  [0.3, 0.6],
   [0.55, 0.55],
 ]) {
   await host.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
   await host.waitForTimeout(120);
 }
-// L'Envahisseur achète deux outils.
-const tools = guest.getByRole('button').filter({ hasText: /Arbalète|Sonde|Grappin/ });
-for (let i = 0; i < Math.min(2, await tools.count()); i++) {
-  await tools.nth(i).click();
-  await guest.waitForTimeout(100);
+const guetCount = await host.innerText('body');
+if (!/[1-3] \/ 3/.test(guetCount.replace(/\s+/g, ' '))) {
+  problems.push('Poser un guet sur le plan ne fait pas monter le compteur.');
 }
-step('pièges posés, outils achetés');
+step('guets posés sur le plan');
 
 for (const p of [host, guest]) {
   const ready = p.getByRole('button', { name: /Je suis prêt/ });
@@ -170,8 +166,6 @@ step('le Châtelain entre en Scrutation');
   await sB.locator('input[type="text"], input:not([type])').first().fill(sCode);
   await sB.getByRole('button', { name: /^Rejoindre$/ }).click();
   await sB.waitForTimeout(2000);
-  await sA.getByRole('radio').nth(0).click();
-  await sB.getByRole('radio').nth(0).click();
   for (const p of [sA, sB]) {
     await p.getByRole('button', { name: /^Je suis prêt$/ }).click();
     await p.waitForTimeout(200);
@@ -180,7 +174,7 @@ step('le Châtelain entre en Scrutation');
 
   for (const [who, page, needle] of [
     ['Châtelain', sA, /Retirer/],
-    ['Envahisseur', sB, /Plan volé/],
+    ['Envahisseur', sB, /Prêt|prêt/],
   ]) {
     const ok = await page.evaluate((src) => {
       const needle = new RegExp(src);

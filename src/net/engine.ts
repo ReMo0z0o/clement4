@@ -31,6 +31,7 @@ import {
 import {
   buildCost,
   canPlaceDevice,
+  canPlaceSensor,
   canPlaceTrap,
   emptyBuild,
   emptyLoadout,
@@ -401,6 +402,7 @@ export class Engine {
     f.device = -1;
     f.rearm = -1;
     f.dodge = false;
+    f.secondary = false;
   }
 
   /* ================================================================== */
@@ -426,6 +428,7 @@ export class Engine {
     this.localInput.device = -1;
     this.localInput.rearm = -1;
     this.localInput.dodge = false;
+    this.localInput.secondary = false;
   }
 
   /* ================================================================== */
@@ -766,6 +769,10 @@ export class Engine {
     Object.assign(this.localInput, patch);
   }
 
+  /**
+   * Le château est tiré au sort à la connexion : le lobby ne demande plus de
+   * choisir. La méthode reste publique pour le jour où on voudra le rendre.
+   */
   setPlan(id: PlanId): void {
     if (this.state.planLocked) return;
     this.state.planId = id;
@@ -774,6 +781,19 @@ export class Engine {
     if (this.isHost) this.match.host.plan = id;
     this.transport.send({ type: 'build', build: this.state.build });
     this.emit();
+  }
+
+  /** Pose un guet (trois au maximum, gratuits). */
+  placeSensor(x: number, y: number): string | null {
+    const plan = getPlan(this.state.planId ?? 'compact');
+    const b = this.state.build;
+    b.sensors ??= [];
+    if (b.sensors.length >= CFG.sensors.count) return 'Trois guets au maximum.';
+    const why = canPlaceSensor(plan, x, y, b.sensors);
+    if (why) return why;
+    b.sensors.push({ id: b.sensors.length, x: Math.floor(x) + 0.5, y: Math.floor(y) + 0.5 });
+    this.emit();
+    return null;
   }
 
   placeTrap(kind: TrapKind, x: number, y: number, tell?: TellKind): string | null {
@@ -820,6 +840,12 @@ export class Engine {
     const tx = Math.floor(x);
     const ty = Math.floor(y);
     const b = this.state.build;
+    const si = (b.sensors ?? []).findIndex((g) => Math.floor(g.x) === tx && Math.floor(g.y) === ty);
+    if (si >= 0) {
+      b.sensors!.splice(si, 1);
+      this.emit();
+      return;
+    }
     const ti = b.traps.findIndex((t) => Math.floor(t.x) === tx && Math.floor(t.y) === ty);
     if (ti >= 0) {
       const [removed] = b.traps.splice(ti, 1);

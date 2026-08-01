@@ -3,9 +3,16 @@
 Un joueur piège son château. L'autre s'y infiltre. Duel 1 contre 1 asymétrique,
 dans le navigateur, avec un code de partie à six caractères.
 
-Le **Châtelain** prépare un château, puis le défend depuis l'intérieur en
-manipulant ses mécanismes. L'**Envahisseur** doit capturer le Cœur du Château —
-vingt secondes de présence — ou tuer le Châtelain, avant la fin du chrono.
+Le **Châtelain** place trois guets dans son château et le défend depuis
+l'intérieur. L'**Envahisseur** doit capturer le Cœur du Château — vingt secondes
+de présence — ou tuer le Châtelain, avant la fin du chrono.
+
+**Les deux camps portent les mêmes armes** : une épée au clic gauche, une
+arbalète au clic droit. Le carreau d'arbalète **rebondit jusqu'à trois fois sur
+les murs** — et après le premier rebond, il ne fait plus la différence entre les
+deux joueurs. Le Châtelain compense par le terrain : il connaît son château, ses
+trois **guets** lui signalent tout passage ennemi à portée, et sa Scrutation lui
+montre tout — au prix de son corps laissé sans défense.
 
 ---
 
@@ -139,14 +146,12 @@ de clavier.
 |---|---|---|
 | Se déplacer | ZQSD / WASD | ZQSD / WASD |
 | Viser | souris | souris |
-| Frapper | clic gauche | clic gauche |
-| Parer | clic droit (maintenu) | — |
+| Épée | clic gauche | clic gauche |
+| **Arbalète** (le carreau rebondit ×3) | clic droit | clic droit |
 | **Maj (maintenu)** | avancer prudemment | — |
 | **Espace (maintenu)** | courir | **Scrutation** |
 | F | esquive roulée | — |
 | E | allumer un brasero | interagir |
-| 1 2 3 | outils | — |
-| clic en Scrutation | — | déclencher un mécanisme |
 | ² ou ~ | panneau de réglage | panneau de réglage |
 
 `Espace` maintenu est la grande touche des deux camps. Aucun des deux rôles ne

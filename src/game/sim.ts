@@ -91,6 +91,11 @@ export class World {
   /** Tuiles déjà traversées : mémoire du plan pour le brouillard. */
   explored = new Set<number>();
 
+  /** Les guets du Châtelain : détecteurs de passage posés à la préparation. */
+  sensors: { id: number; x: number; y: number; readyAt: number }[] = [];
+  /** Dernier passage détecté par un guet — l'indicateur du Châtelain. */
+  ping: { x: number; y: number; at: number } | null = null;
+
   now = 0;
   timeLeft: number;
   duration: number;
@@ -140,6 +145,9 @@ export class World {
       this.braziers.push({ id: i, pos: init.plan.brazierSpots[i], lit: false, progress: 0 });
     }
 
+    for (const g of init.build.sensors ?? []) {
+      this.sensors.push({ id: g.id, x: g.x, y: g.y, readyAt: 0 });
+    }
     for (const di of init.build.lockedDoors) {
       const d = init.plan.doors[di];
       if (d) this.castle.addBlocker(Math.floor(d.x), Math.floor(d.y), Infinity, 'lock');
@@ -171,6 +179,9 @@ export class World {
     this.updateScry(casIn, dt);
     this.updateActor(this.invader, invIn, dt);
     this.updateActor(this.castellan, casIn, dt);
+    this.fireCrossbow(this.invader, invIn);
+    this.fireCrossbow(this.castellan, casIn);
+    this.updateSensors();
     this.updateTools(invIn, dt);
     this.updateDevices(casIn);
     this.updateEntities(dt);
@@ -432,6 +443,54 @@ export class World {
     if (a.flying && a.state !== 'dodge') a.flying = false;
 
     this.emitFootsteps(a, dt);
+  }
+
+  /**
+   * Tir d'arbalète, commun aux deux camps. Le carreau rebondit sur les murs
+   * (voir `updateEntities`) : un tir raté continue de vivre dans le couloir,
+   * y compris pour celui qui l'a tiré.
+   */
+  private fireCrossbow(a: Actor, input: InputFrame): void {
+    if (!input.secondary || !a.alive) return;
+    if (this.now < a.actionLockUntil || this.now < a.crossbowReadyAt) return;
+    if (a.state === 'windup' || a.state === 'recover' || a.state === 'casting') return;
+    if (a.state === 'dodge' || a.state === 'stun' || a.state === 'immobile') return;
+    if (a.role === 'castellan' && this.scrying) return;
+    // À la course, on ne vise pas (§4 : la course interdit d'attaquer).
+    if (a.role === 'invader' && !CFG.invader.gait[a.gait].canAttack) return;
+
+    const dir = { x: Math.cos(a.aim), y: Math.sin(a.aim) };
+    const e = this.spawnEntity(
+      'bolt',
+      // 0,4 tuile devant le tireur : assez pour sortir de son cercle, assez
+      // peu pour ne pas naître de l'autre côté d'un mur mitoyen.
+      { x: a.pos.x + dir.x * 0.4, y: a.pos.y + dir.y * 0.4 },
+      { x: dir.x * CFG.combat.crossbow.speed, y: dir.y * CFG.combat.crossbow.speed },
+      CFG.combat.crossbow.lifetime,
+      a.role,
+    );
+    e.bounces = CFG.combat.crossbow.bounces;
+    e.born = this.now;
+    a.crossbowReadyAt = this.now + CFG.combat.crossbow.reload;
+    a.actionLockUntil = Math.max(a.actionLockUntil, this.now + CFG.combat.crossbow.windup);
+    this.events.push({ k: 'bolt', x: a.pos.x, y: a.pos.y });
+  }
+
+  /**
+   * Les guets. Quand l'Envahisseur passe à portée d'un guet armé, le Châtelain
+   * reçoit un indicateur — où qu'il soit. Le guet se tait ensuite quelques
+   * secondes : il signale un passage, il ne diffuse pas une position en continu.
+   */
+  private updateSensors(): void {
+    const inv = this.invader;
+    if (!inv.alive) return;
+    for (const g of this.sensors) {
+      if (this.now < g.readyAt) continue;
+      if (dist(inv.pos, { x: g.x, y: g.y }) > CFG.sensors.radius) continue;
+      g.readyAt = this.now + CFG.sensors.cooldown;
+      this.ping = { x: inv.pos.x, y: inv.pos.y, at: this.now };
+      this.events.push({ k: 'sensor', x: inv.pos.x, y: inv.pos.y });
+    }
   }
 
   private weapon(a: Actor) {
@@ -701,7 +760,7 @@ export class World {
           'bolt',
           { x: a.pos.x + dir.x * 0.5, y: a.pos.y + dir.y * 0.5 },
           { x: dir.x * CFG.combat.crossbow.speed, y: dir.y * CFG.combat.crossbow.speed },
-          CFG.combat.crossbow.range / CFG.combat.crossbow.speed,
+          CFG.combat.crossbow.lifetime,
           'invader',
         );
         slot.readyAt = this.now + CFG.combat.crossbow.reload;
@@ -845,18 +904,64 @@ export class World {
       e.ttl -= dt;
       switch (e.kind) {
         case 'bolt': {
-          const next = { x: e.pos.x + e.vel.x * dt, y: e.pos.y + e.vel.y * dt };
-          if (this.castle.circleHits(next.x, next.y, 0.1, 'invader', this.now, false)) {
-            e.ttl = 0;
-            break;
+          // Un mur fait rebondir le carreau — jusqu'à trois fois, puis il se
+          // fiche au quatrième impact. Les trous et les murets ne l'arrêtent
+          // pas : il vole au-dessus.
+          // La position courante est biaisée d'un cheveu vers l'arrière du
+          // vol avant d'être rangée dans une tuile : un carreau posé pile sur
+          // une frontière (x = 10,0 exactement) serait sinon classé dans la
+          // colonne du mur qu'il longe, et rebondirait sur place jusqu'à
+          // mourir sans avoir volé.
+          const bx = e.pos.x - Math.sign(e.vel.x) * 1e-4;
+          const by = e.pos.y - Math.sign(e.vel.y) * 1e-4;
+          let vx = e.vel.x;
+          let vy = e.vel.y;
+          let nx = e.pos.x + vx * dt;
+          let ny = e.pos.y + vy * dt;
+          let bounced = false;
+          if (this.boltBlocked(nx, by)) {
+            vx = -vx;
+            nx = e.pos.x + vx * dt;
+            bounced = true;
           }
-          e.pos = next;
-          const target = e.owner === 'invader' ? this.castellan : this.invader;
-          if (target.alive && dist(e.pos, target.pos) < 0.45) {
+          if (this.boltBlocked(bx, ny)) {
+            vy = -vy;
+            ny = e.pos.y + vy * dt;
+            bounced = true;
+          }
+          if (!bounced && this.boltBlocked(nx, ny)) {
+            vx = -vx;
+            vy = -vy;
+            nx = e.pos.x + vx * dt;
+            ny = e.pos.y + vy * dt;
+            bounced = true;
+          }
+          if (bounced) {
+            if ((e.bounces ?? 0) <= 0) {
+              e.ttl = 0;
+              break;
+            }
+            e.bounces = (e.bounces ?? 0) - 1;
+            e.vel = { x: vx, y: vy };
+            e.angle = Math.atan2(vy, vx);
+            this.events.push({ k: 'ricochet', x: e.pos.x, y: e.pos.y });
+          }
+          e.pos = { x: nx, y: ny };
+
+          // Après le premier rebond, le carreau ne connaît plus son camp :
+          // il blesse quiconque le croise, tireur compris.
+          const hasBounced = (e.bounces ?? 0) < CFG.combat.crossbow.bounces;
+          for (const target of [this.invader, this.castellan]) {
+            if (!target.alive || dist(e.pos, target.pos) >= 0.45) continue;
+            const isOwner = target.role === e.owner;
+            const fresh = this.now - (e.born ?? 0) < CFG.combat.crossbow.selfGrace;
+            if (isOwner && !hasBounced && fresh) continue;
+            if (isOwner && !hasBounced) continue;
             this.damage(target, CFG.combat.crossbow.damage, 'arbalète');
             e.ttl = 0;
             break;
           }
+          if (e.ttl <= 0) break;
           for (const h of this.entities) {
             if (h.kind === 'hound' && h.hp !== undefined && dist(e.pos, h.pos) < 0.5) {
               h.hp -= CFG.combat.crossbow.damage;
@@ -888,6 +993,19 @@ export class World {
     }
 
     this.entities = this.entities.filter((e) => e.ttl > 0);
+  }
+
+  /**
+   * Un carreau est arrêté par ce qui arrête une flèche : la pierre, une porte
+   * fermée, une herse. Il survole les trous et les murets.
+   */
+  private boltBlocked(x: number, y: number): boolean {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    const t = this.castle.tile(tx, ty);
+    if (t === T.WALL || t === T.RUBBLE || t === T.FRAGILE || t === T.SECRET) return true;
+    if (this.castle.isBlocked(tx, ty, this.now)) return true;
+    return false;
   }
 
   private explode(at: Vec): void {
@@ -1207,6 +1325,7 @@ function makeActor(role: Role, pos: Vec, hp: number): Actor {
     flying: false,
     grappleTarget: null,
     castKind: null,
+    crossbowReadyAt: 0,
   };
 }
 

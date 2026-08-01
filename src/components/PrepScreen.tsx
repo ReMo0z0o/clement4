@@ -13,20 +13,10 @@
  */
 
 import { useState } from 'react';
-import { CFG, DEVICE_KINDS, INTEL_KINDS, TELL_KINDS, TOOL_KINDS, TRAP_KINDS } from '@/game/config';
-import type { IntelKind, ToolKind } from '@/game/config';
+import { CFG } from '@/game/config';
 import { roundHeadline } from '@/game/match';
 import type { Engine, EngineState } from '@/net/engine';
-import type { DeviceKind, TellKind, TrapKind } from '@/game/types';
 import { PlanCanvas, type Brush } from './PlanCanvas';
-
-const TELL_LABEL: Record<TellKind, string> = {
-  seam: 'Dalles jointoyées',
-  slit: 'Trous d’archère',
-  crack: 'Fissures',
-  dust: 'Poussière',
-  chest: 'Coffre',
-};
 
 export function PrepScreen({
   engine,
@@ -37,12 +27,11 @@ export function PrepScreen({
   state: EngineState;
   onSound?: (k: 'place' | 'remove' | 'deny' | 'ready') => void;
 }) {
-  const [brush, setBrush] = useState<Brush>({ kind: 'trap', trap: 'spikes', tell: 'seam' });
-  const [decoyTell, setDecoyTell] = useState<TellKind>('seam');
+  const [brush, setBrush] = useState<Brush>({ kind: 'sensor' });
   const [notice, setNotice] = useState<string | null>(null);
 
   const castellan = state.role === 'castellan';
-  const left = state.budgetTotal - state.budgetSpent;
+  const sensorsPlaced = state.build.sensors?.length ?? 0;
   const seconds = Math.ceil(state.timeLeft);
 
   const say = (msg: string | null) => {
@@ -51,9 +40,8 @@ export function PrepScreen({
   };
 
   const place = (x: number, y: number) => {
-    let why: string | null = null;
-    if (brush.kind === 'trap') why = engine.placeTrap(brush.trap, x, y, decoyTell);
-    else if (brush.kind === 'device') why = engine.placeDevice(brush.device, x, y);
+    if (brush.kind !== 'sensor') return;
+    const why = engine.placeSensor(x, y);
     if (why) say(why);
     else {
       say(null);
@@ -111,24 +99,21 @@ export function PrepScreen({
         <div className="panel rounded-sm p-3">
           <div className="flex items-baseline justify-between">
             <span className="text-[11px] uppercase tracking-widest opacity-60">
-              {castellan ? 'Budget de construction' : 'Budget d’équipement'}
+              {castellan ? 'Guets posés' : 'Votre équipement'}
             </span>
             <span className="font-code text-lg tabular-nums">
-              {left}
-              <span className="opacity-45"> / {state.budgetTotal}</span>
+              {castellan ? `${sensorsPlaced} / ${CFG.sensors.count}` : 'épée + arbalète'}
             </span>
           </div>
-          <div className="mt-2 h-2 overflow-hidden rounded-sm bg-black/55">
-            <div
-              className="h-full bg-[var(--role-accent)] transition-[width] duration-150"
-              style={{ width: `${(state.budgetSpent / Math.max(1, state.budgetTotal)) * 100}%` }}
-            />
-          </div>
-          {castellan && state.burned.length > 0 && (
-            <p className="mt-2 text-[12px] leading-snug text-heart-gold">
-              {state.burned.length} piège{state.burned.length > 1 ? 's' : ''} repéré
-              {state.burned.length > 1 ? 's' : ''} à la manche précédente. Déplacez-les : ça ne coûte
-              rien.
+          {castellan ? (
+            <p className="mt-2 text-[12px] leading-snug opacity-55">
+              Un guet vous signale tout passage ennemi à {CFG.sensors.radius} pas, où que vous
+              soyez. Placez aussi votre Cœur : c’est lui qu’il vient prendre.
+            </p>
+          ) : (
+            <p className="mt-2 text-[12px] leading-snug opacity-55">
+              Rien à choisir : votre épée est au clic gauche, votre arbalète au clic droit. Le
+              carreau rebondit trois fois sur les murs — le vôtre aussi.
             </p>
           )}
         </div>
@@ -137,15 +122,9 @@ export function PrepScreen({
             elle défile dans sa colonne, entre le budget et le bouton. */}
         <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
           {castellan ? (
-            <CastellanPalette
-              brush={brush}
-              setBrush={setBrush}
-              decoyTell={decoyTell}
-              setDecoyTell={setDecoyTell}
-              left={left}
-            />
+            <CastellanPalette brush={brush} setBrush={setBrush} placed={sensorsPlaced} />
           ) : (
-            <InvaderShop engine={engine} state={state} onSound={onSound} />
+            <InvaderChecklist />
           )}
         </div>
 
@@ -185,109 +164,30 @@ export function PrepScreen({
 /* ==================================================================== */
 /* Palette du Châtelain                                                 */
 /* ==================================================================== */
+/* Palette du Châtelain : trois guets et un Cœur                        */
+/* ==================================================================== */
 
 function CastellanPalette({
   brush,
   setBrush,
-  decoyTell,
-  setDecoyTell,
-  left,
+  placed,
 }: {
   brush: Brush;
   setBrush: (b: Brush) => void;
-  decoyTell: TellKind;
-  setDecoyTell: (t: TellKind) => void;
-  left: number;
+  placed: number;
 }) {
   return (
     <div className="space-y-4">
-      <Group title="Pièges automatiques" hint="Chacun laisse un indice visible en allure prudente.">
-        {TRAP_KINDS.filter((k) => k !== 'decoy').map((k) => {
-          const spec = CFG.traps[k];
-          const active = brush.kind === 'trap' && brush.trap === k;
-          return (
-            <PaletteButton
-              key={k}
-              active={active}
-              disabled={spec.cost > left && !active}
-              cost={spec.cost}
-              title={spec.label}
-              sub={spec.tellLabel}
-              onClick={() => setBrush({ kind: 'trap', trap: k as TrapKind, tell: spec.tell })}
-            />
-          );
-        })}
-      </Group>
-
       <Group
-        title="Faux indices"
-        hint="Identiques aux vrais. Vingt points peuvent coûter quarante secondes à votre adversaire."
+        title={`Guets — ${placed} / ${CFG.sensors.count}`}
+        hint="Cliquez sur le plan pour poser. Un guet signale tout passage, où que vous soyez."
       >
         <PaletteButton
-          active={brush.kind === 'trap' && brush.trap === 'decoy'}
-          disabled={CFG.traps.decoy.cost > left}
-          cost={CFG.traps.decoy.cost}
-          title="Faux indice"
-          sub={`Apparence : ${TELL_LABEL[decoyTell]}`}
-          onClick={() => setBrush({ kind: 'trap', trap: 'decoy', tell: decoyTell })}
-        />
-        <div className="col-span-2 flex flex-wrap gap-1">
-          {TELL_KINDS.map((t) => (
-            <button
-              key={t}
-              type="button"
-              aria-pressed={decoyTell === t}
-              onClick={() => {
-                setDecoyTell(t);
-                setBrush({ kind: 'trap', trap: 'decoy', tell: t });
-              }}
-              className="stone-button rounded-sm px-2 py-1 text-[11px]"
-            >
-              {TELL_LABEL[t]}
-            </button>
-          ))}
-        </div>
-      </Group>
-
-      <Group title="Mécanismes" hint="Déclenchés en Scrutation, payés en Influence.">
-        {DEVICE_KINDS.map((k) => {
-          const spec = CFG.devices[k];
-          const active = brush.kind === 'device' && brush.device === k;
-          return (
-            <PaletteButton
-              key={k}
-              active={active}
-              disabled={spec.cost > left && !active}
-              cost={spec.cost}
-              title={spec.label}
-              sub={`${spec.hint} · ${spec.influence} Influence`}
-              onClick={() => setBrush({ kind: 'device', device: k as DeviceKind })}
-            />
-          );
-        })}
-      </Group>
-
-      <Group title="Le château" hint="Votre mobilité privée vaut souvent mieux qu’un piège de plus.">
-        <PaletteButton
-          active={brush.kind === 'heart'}
+          active={brush.kind === 'sensor'}
           cost={0}
-          title="Placer le Cœur"
-          sub="Trois emplacements possibles"
-          onClick={() => setBrush({ kind: 'heart' })}
-        />
-        <PaletteButton
-          active={brush.kind === 'door'}
-          cost={CFG.fixtures.lockDoor.cost}
-          title="Verrouiller une porte"
-          sub="Vous passez, lui non"
-          onClick={() => setBrush({ kind: 'door' })}
-        />
-        <PaletteButton
-          active={brush.kind === 'secret'}
-          cost={CFG.fixtures.secretDoor.cost}
-          title="Passage secret"
-          sub="Traverser sans croiser son chemin"
-          onClick={() => setBrush({ kind: 'secret' })}
+          title="Poser un guet"
+          sub={`Détection à ${CFG.sensors.radius} pas · se tait ${CFG.sensors.cooldown} s après avoir sonné`}
+          onClick={() => setBrush({ kind: 'sensor' })}
         />
         <PaletteButton
           active={brush.kind === 'erase'}
@@ -297,79 +197,27 @@ function CastellanPalette({
           onClick={() => setBrush({ kind: 'erase' })}
         />
       </Group>
-    </div>
-  );
-}
-
-/* ==================================================================== */
-/* Boutique de l'Envahisseur                                            */
-/* ==================================================================== */
-
-function InvaderShop({
-  engine,
-  state,
-  onSound,
-}: {
-  engine: Engine;
-  state: EngineState;
-  onSound?: (k: 'place' | 'remove' | 'deny' | 'ready') => void;
-}) {
-  const chosen = state.loadout.tools;
-  const full = chosen.length >= CFG.budget.maxTools;
-  const left = CFG.budget.invader - state.budgetSpent;
-
-  return (
-    <div className="space-y-4">
-      <Group
-        title={`Outils — ${chosen.length} / ${CFG.budget.maxTools}`}
-        hint="L’épée est gratuite et vous l’avez déjà."
-      >
-        {TOOL_KINDS.map((k) => {
-          const spec = CFG.tools[k];
-          const active = chosen.includes(k as ToolKind);
-          return (
-            <PaletteButton
-              key={k}
-              active={active}
-              disabled={!active && (full || spec.cost > left)}
-              cost={spec.cost}
-              title={spec.label}
-              sub={spec.hint}
-              onClick={() => {
-                engine.toggleTool(k as ToolKind);
-                onSound?.(active ? 'remove' : 'place');
-              }}
-            />
-          );
-        })}
-      </Group>
 
       <Group
-        title="Renseignement"
-        hint="Payé sur le même budget : de la puissance en moins, du savoir en plus."
+        title="Le Cœur"
+        hint="C’est lui que l’Envahisseur vient capturer — et votre recharge d’Influence."
       >
-        {INTEL_KINDS.map((k) => {
-          const spec = CFG.intel[k];
-          const active = state.loadout.intel.includes(k as IntelKind);
-          return (
-            <PaletteButton
-              key={k}
-              active={active}
-              disabled={!active && spec.cost > left}
-              cost={spec.cost}
-              title={spec.label}
-              sub={spec.hint}
-              onClick={() => {
-                engine.toggleIntel(k as IntelKind);
-                onSound?.(active ? 'remove' : 'place');
-              }}
-            />
-          );
-        })}
+        <PaletteButton
+          active={brush.kind === 'heart'}
+          cost={0}
+          title="Placer le Cœur"
+          sub="Trois emplacements possibles"
+          onClick={() => setBrush({ kind: 'heart' })}
+        />
       </Group>
     </div>
   );
 }
+
+
+/* ==================================================================== */
+/* Côté Envahisseur : rien à acheter, tout à savoir                     */
+/* ==================================================================== */
 
 function InvaderBriefing({ state }: { state: EngineState }) {
   return (
@@ -377,30 +225,58 @@ function InvaderBriefing({ state }: { state: EngineState }) {
       <h3 className="font-display text-xl">Ce que vous savez</h3>
       <ul className="space-y-2 text-sm leading-relaxed opacity-80">
         <li>
-          Le château est piégé. Chaque piège laisse un indice, et seule l’allure prudente les
-          révèle — mais ralentir coûte du temps, et le temps est votre véritable adversaire.
-        </li>
-        <li>
-          Certains indices sont faux. Ils coûtent presque rien à poser. Vous ne saurez jamais
-          lesquels avant de vous engager.
-        </li>
-        <li>
           Trouvez le Cœur et tenez-vous-y {CFG.heart.captureTime} secondes. Le Châtelain doit y
           revenir pour recharger : vous finirez par vous croiser.
         </li>
         <li>
-          Trois braseros donnent {CFG.brazier.timeBonus} secondes chacun, deux au maximum. Ils sont
-          loin du Cœur — c’est le prix.
+          Vous portez la même épée et la même arbalète que lui. Le carreau rebondit jusqu’à{' '}
+          {CFG.combat.crossbow.bounces} fois sur les murs — un tir raté continue de vivre dans le
+          couloir, et il ne fait pas la différence entre vous deux.
+        </li>
+        <li>
+          Le château est équipé de guets : passez à portée et le Châtelain saura où. Vous ne les
+          verrez pas, et rien ne vous dira que vous avez été repéré.
+        </li>
+        <li>
+          Trois braseros donnent {CFG.brazier.timeBonus} secondes chacun, deux au maximum. Ils
+          sont loin du Cœur — c’est le prix.
         </li>
       </ul>
       {state.round >= 3 && (
         <p className="border-l-2 border-[var(--role-accent)] pl-3 text-sm text-[var(--role-accent)]">
-          Vous connaissez déjà ce château. Il le sait aussi, et il a eu le temps de le changer.
+          Vous connaissez déjà ce château. Il a eu le temps de déplacer ses guets.
         </p>
       )}
     </div>
   );
 }
+
+/** La colonne de droite de l'Envahisseur : ses commandes, pour mémoire. */
+function InvaderChecklist() {
+  const rows = [
+    ['Clic gauche', 'Épée'],
+    ['Clic droit', 'Arbalète — rebondit 3 fois'],
+    ['Maj (maintenu)', 'Avancer prudemment'],
+    ['Espace (maintenu)', 'Courir'],
+    ['F', 'Esquive roulée'],
+    ['E', 'Allumer un brasero'],
+  ] as const;
+  return (
+    <div className="space-y-1.5">
+      <h3 className="text-[11px] uppercase tracking-widest opacity-60">Vos commandes</h3>
+      {rows.map(([k, v]) => (
+        <div
+          key={k}
+          className="flex items-center justify-between rounded-sm bg-black/35 px-2.5 py-1.5 text-[12px]"
+        >
+          <span className="opacity-80">{v}</span>
+          <span className="font-code opacity-55">{k}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 
 /* ==================================================================== */
 /* Briques d'interface                                                  */

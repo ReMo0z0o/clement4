@@ -84,6 +84,7 @@ export class SnapshotFilter {
       toolUses: isInvader ? tools.map((t) => (t.uses === Infinity ? -1 : t.uses)) : [],
       toolCooldowns: isInvader ? tools.map((t) => Math.max(0, t.readyAt - world.now)) : [],
       shieldHp: isInvader && world.now < world.shieldUntil ? world.shieldHp : 0,
+      crossbowCooldown: Math.max(0, me.crossbowReadyAt - world.now),
     };
 
     /* ---- l'autre : seulement s'il est réellement perçu ---- */
@@ -258,6 +259,16 @@ export class SnapshotFilter {
         y: t.y,
         state: t.state,
       }));
+      snap.sensors = world.sensors.map((g) => ({
+        id: g.id,
+        x: g.x,
+        y: g.y,
+        ready: world.now >= g.readyAt,
+      }));
+      snap.ping =
+        world.ping && world.now - world.ping.at <= CFG.sensors.pingDuration
+          ? { x: world.ping.x, y: world.ping.y, age: world.now - world.ping.at }
+          : null;
     } else {
       snap.hintedBraziers = this.intel.brazier !== undefined ? [this.intel.brazier] : [];
       snap.hintedHearts = this.intel.eliminatedHeart ?? [];
@@ -296,6 +307,8 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
       problems.push("La position du Châtelain est transmise alors qu'il n'est pas perçu.");
     }
     if (snap.devices) problems.push("Les mécanismes du Châtelain sont transmis à l'Envahisseur.");
+    if (snap.sensors) problems.push("Les guets du Châtelain sont transmis à l'Envahisseur.");
+    if (snap.ping) problems.push("L'indicateur des guets est transmis à l'Envahisseur.");
     if (snap.ownTraps) problems.push("Les pièges du Châtelain sont transmis à l'Envahisseur.");
     if (snap.self.influence !== 0) problems.push("L'Influence du Châtelain est transmise à l'Envahisseur.");
     if (snap.heart && !world.seenHeart && world.captureProgress === 0 && !(snap.hintedHearts?.length)) {
@@ -360,6 +373,9 @@ export function filterEvents(events: GameEvent[], role: Role, world: World): Gam
         if (role === 'castellan') out.push(e);
         break;
       case 'scry':
+      case 'sensor':
+        // Un guet qui sonne n'avertit que son propriétaire : l'Envahisseur ne
+        // doit jamais apprendre qu'il vient d'être repéré, ni où était le guet.
         if (role === 'castellan') out.push(e);
         break;
       case 'probe':

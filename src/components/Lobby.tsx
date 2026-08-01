@@ -9,8 +9,7 @@
  * fonctions qu'on lui donne.
  */
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import type { PlanId } from '@/game/types';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { codeProblem, normalizeCode, transportBlurb, type TransportKind } from '@/net/transport';
 
 export interface LobbyProps {
@@ -29,9 +28,6 @@ export interface LobbyProps {
   onOpenSecondWindow: () => void;
   error: string | null;
   transportKind: TransportKind;
-  plans: { id: PlanId; name: string; blurb: string }[];
-  selectedPlan: PlanId | null;
-  onSelectPlan: (id: PlanId) => void;
   ready: boolean;
   peerReady: boolean;
   peerConnected: boolean;
@@ -61,67 +57,6 @@ function waitingAdvice(isHost: boolean, kind: TransportKind): string {
         'adversaire d’en créer une nouvelle.';
 }
 
-/* ==================================================================== */
-/* Silhouettes de plan — dessinées, jamais photographiées               */
-/* ==================================================================== */
-
-const STROKE = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-};
-
-/** Une forme suffit à dire « serré », « tordu » ou « ouvert ». */
-function PlanGlyph({ id }: { id: PlanId }) {
-  if (id === 'labyrinth') {
-    const d = 'M9 41 L9 27 L19 27 L19 13 L31 13 L31 31 L40 31 L40 9';
-    return (
-      <svg viewBox="0 0 48 48" className="h-16 w-16 shrink-0" aria-hidden="true">
-        <path {...STROKE} d={d} strokeWidth={7} opacity={0.22} />
-        <path {...STROKE} d={d} strokeWidth={1.4} />
-        <path {...STROKE} strokeWidth={1.4} d="M9 13 L14 13 M24 41 L24 35 M40 41 L40 38" opacity={0.55} />
-      </svg>
-    );
-  }
-  if (id === 'open') {
-    const columns = [14, 22, 30, 38];
-    return (
-      <svg viewBox="0 0 48 48" className="h-16 w-16 shrink-0" aria-hidden="true">
-        <rect {...STROKE} strokeWidth={1.4} x={6} y={8} width={36} height={14} rx={1.5} />
-        <rect {...STROKE} strokeWidth={1.4} x={6} y={26} width={36} height={14} rx={1.5} />
-        {columns.map((x) => (
-          <circle key={`a${x}`} cx={x} cy={15} r={1.5} fill="currentColor" opacity={0.6} />
-        ))}
-        {columns.map((x) => (
-          <circle key={`b${x}`} cx={x} cy={33} r={1.5} fill="currentColor" opacity={0.6} />
-        ))}
-      </svg>
-    );
-  }
-  const cells = [0, 1, 2];
-  return (
-    <svg viewBox="0 0 48 48" className="h-16 w-16 shrink-0" aria-hidden="true">
-      {cells.map((j) =>
-        cells.map((i) => (
-          <rect
-            key={`${i}-${j}`}
-            {...STROKE}
-            strokeWidth={1.4}
-            x={7 + i * 12}
-            y={7 + j * 12}
-            width={10}
-            height={10}
-            rx={1}
-          />
-        )),
-      )}
-    </svg>
-  );
-}
-
-/* ==================================================================== */
-
 export function Lobby(props: LobbyProps) {
   const {
     onCreate,
@@ -134,9 +69,6 @@ export function Lobby(props: LobbyProps) {
     onOpenSecondWindow,
     error,
     transportKind,
-    plans,
-    selectedPlan,
-    onSelectPlan,
     ready,
     peerReady,
     peerConnected,
@@ -148,7 +80,6 @@ export function Lobby(props: LobbyProps) {
   const [copied, setCopied] = useState(false);
   const codeFieldId = useId();
   const codeHintId = useId();
-  const planRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const problem = codeProblem(typed);
   const busy = status === 'connecting';
@@ -189,32 +120,12 @@ export function Lobby(props: LobbyProps) {
     [onJoin, typed],
   );
 
-  /** Groupe radio au clavier : flèches pour parcourir, un seul arrêt de tabulation. */
-  const onPlanKey = useCallback(
-    (e: React.KeyboardEvent, i: number) => {
-      const n = plans.length;
-      if (n === 0) return;
-      let next = -1;
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % n;
-      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + n) % n;
-      else if (e.key === 'Home') next = 0;
-      else if (e.key === 'End') next = n - 1;
-      if (next < 0) return;
-      e.preventDefault();
-      onSelectPlan(plans[next].id);
-      planRefs.current[next]?.focus();
-    },
-    [onSelectPlan, plans],
-  );
-
-  const canReady = open && peerConnected && selectedPlan !== null;
+  const canReady = open && peerConnected;
   const blocker = !open
     ? 'Créez une partie ou rejoignez celle de votre adversaire.'
     : !peerConnected
       ? 'Attendez votre adversaire.'
-      : selectedPlan === null
-        ? 'Choisissez un château pour continuer.'
-        : null;
+      : null;
 
   return (
     <main className="flex min-h-dvh w-full items-center justify-center px-5 py-10 sm:px-8">
@@ -430,52 +341,6 @@ export function Lobby(props: LobbyProps) {
           </section>
         </div>
 
-        {/* ---- Choix du château ---- */}
-        <section className="mt-5" aria-labelledby={`${codeFieldId}-plans`}>
-          <h2 id={`${codeFieldId}-plans`} className="font-display text-xl">
-            Votre château
-          </h2>
-          <p className="mt-1 text-sm opacity-70">
-            Vous le défendrez, puis vous devrez le retourner contre lui.
-          </p>
-
-          <div className="mt-4 grid gap-4 sm:grid-cols-3" role="radiogroup" aria-label="Votre château">
-            {plans.map((p, i) => {
-              const on = selectedPlan === p.id;
-              return (
-                <button
-                  key={p.id}
-                  ref={(el) => {
-                    planRefs.current[i] = el;
-                  }}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  tabIndex={on || (selectedPlan === null && i === 0) ? 0 : -1}
-                  onClick={() => onSelectPlan(p.id)}
-                  onKeyDown={(e) => onPlanKey(e, i)}
-                  className="panel flex items-start gap-4 rounded-lg p-4 text-left transition-colors"
-                  style={{
-                    borderColor: on
-                      ? 'var(--role-accent)'
-                      : 'color-mix(in srgb, var(--role-accent) 22%, transparent)',
-                    background: on
-                      ? 'color-mix(in srgb, var(--role-accent) 14%, var(--role-panel))'
-                      : undefined,
-                  }}
-                >
-                  <span style={{ color: on ? 'var(--role-accent)' : 'var(--color-parchment)', opacity: on ? 1 : 0.55 }}>
-                    <PlanGlyph id={p.id} />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="font-display block text-lg leading-tight">{p.name}</span>
-                    <span className="mt-1 block text-sm leading-snug opacity-70">{p.blurb}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
       </div>
     </main>
   );
