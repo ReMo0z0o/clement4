@@ -62,9 +62,13 @@ export function PrepScreen({
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 p-4 lg:flex-row">
+    // En dessous de `lg`, les deux colonnes s'empilent et la page défile
+    // normalement. À partir de `lg`, on fige la hauteur et ce sont les colonnes
+    // qui défilent chacune de leur côté : le plan reste visible pendant qu'on
+    // parcourt la palette.
+    <div className="flex min-h-dvh flex-col gap-4 p-4 pb-24 lg:h-dvh lg:flex-row lg:overflow-hidden lg:pb-4">
       {/* ---------------- Colonne de gauche : le plan ou le briefing ------- */}
-      <section className="flex min-w-0 flex-1 flex-col items-center gap-3">
+      <section className="flex min-w-0 flex-1 flex-col items-center gap-3 lg:min-h-0 lg:overflow-y-auto">
         <header className="w-full max-w-[640px]">
           <div className="flex items-baseline justify-between">
             <h2 className="font-display text-2xl">
@@ -103,7 +107,7 @@ export function PrepScreen({
       </section>
 
       {/* ---------------- Colonne de droite : les achats ------------------- */}
-      <aside className="flex w-full flex-col gap-3 lg:w-[380px]">
+      <aside className="flex w-full flex-col gap-3 lg:h-full lg:min-h-0 lg:w-[380px]">
         <div className="panel rounded-sm p-3">
           <div className="flex items-baseline justify-between">
             <span className="text-[11px] uppercase tracking-widest opacity-60">
@@ -129,7 +133,9 @@ export function PrepScreen({
           )}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        {/* Sur petit écran la palette se déroule dans le flux ; sur grand écran
+            elle défile dans sa colonne, entre le budget et le bouton. */}
+        <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
           {castellan ? (
             <CastellanPalette
               brush={brush}
@@ -143,18 +149,30 @@ export function PrepScreen({
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            engine.setReady(!state.ready);
-            onSound?.('ready');
-          }}
-          aria-pressed={state.ready}
-          className="stone-button rounded-sm px-4 py-3 font-display text-lg"
-        >
-          {state.ready ? 'Prêt — en attente' : 'Je suis prêt'}
-        </button>
-        <p className="text-center text-[12px] opacity-55">
+        {/* Barre d'action collante en bas de l'écran tant qu'on n'est pas en
+            deux colonnes. Pendant une préparation de 75 secondes, le chrono et
+            le bouton de départ ne doivent jamais demander de faire défiler. */}
+        <div className="fixed inset-x-0 bottom-0 z-10 flex items-center gap-3 border-t border-[var(--role-accent)]/25 bg-[var(--role-bg)]/95 p-3 backdrop-blur lg:static lg:z-auto lg:block lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
+          <span
+            className={`font-code text-2xl tabular-nums lg:hidden ${
+              seconds <= 10 ? 'text-danger ember-pulse' : ''
+            }`}
+          >
+            {seconds}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              engine.setReady(!state.ready);
+              onSound?.('ready');
+            }}
+            aria-pressed={state.ready}
+            className="stone-button flex-1 rounded-sm px-4 py-3 font-display text-lg lg:w-full"
+          >
+            {state.ready ? 'Prêt — en attente' : 'Je suis prêt'}
+          </button>
+        </div>
+        <p className="hidden text-center text-[12px] opacity-55 lg:block">
           {state.peerReady
             ? 'Votre adversaire est prêt.'
             : 'Votre adversaire prépare encore son tour.'}

@@ -171,8 +171,18 @@ export function MatchShell() {
 
   const phase = state?.phase ?? 'lobby';
 
+  // Seul le jeu impose une hauteur d'écran fixe : le canvas doit occuper la
+  // fenêtre, sans barre de défilement. Partout ailleurs — lobby, préparation,
+  // écrans de fin — le contenu doit pouvoir dépasser et défiler, sinon un
+  // écran un peu court rend des boutons inatteignables.
+  const fixedViewport = phase === 'countdown' || phase === 'invasion';
+
   return (
-    <main className="relative h-dvh w-full overflow-hidden">
+    <main
+      className={`relative w-full ${
+        fixedViewport ? 'h-dvh overflow-hidden' : 'min-h-dvh'
+      }`}
+    >
       {(!engine || phase === 'lobby') && (
         <Lobby
           onCreate={onCreate}

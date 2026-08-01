@@ -155,7 +155,7 @@ export function RoundEnd(props: RoundEndProps) {
   const untouched = stats.trapsUntouched.length;
 
   return (
-    <main className="flex h-dvh w-full flex-col overflow-y-auto px-5 py-5 sm:px-8 lg:overflow-hidden">
+    <main className="flex min-h-dvh w-full flex-col overflow-y-auto px-5 py-5 sm:px-8">
       <div className="slide-up mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4">
         {/* ---- Verdict ---- */}
         <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">

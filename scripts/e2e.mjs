@@ -155,6 +155,54 @@ await shot(host, '06-scrutation');
 await host.keyboard.up('Space');
 step('le Châtelain entre en Scrutation');
 
+/* ---- Sur un écran court, tout doit rester atteignable ----
+ * C'est le bug le plus sournois d'une mise en page : un bouton coupé par un
+ * conteneur en overflow-hidden n'est pas « plus bas », il est inatteignable. */
+{
+  const small = await browser.newContext({ viewport: { width: 1000, height: 620 } });
+  const sA = await small.newPage();
+  const sB = await small.newPage();
+  await sA.goto(URL, { waitUntil: 'networkidle' });
+  await sB.goto(URL, { waitUntil: 'networkidle' });
+  await sA.getByRole('button', { name: /créer/i }).first().click();
+  await sA.waitForTimeout(1200);
+  const sCode = (await sA.locator('.session-code').first().innerText()).replace(/\s/g, '');
+  await sB.locator('input[type="text"], input:not([type])').first().fill(sCode);
+  await sB.getByRole('button', { name: /^Rejoindre$/ }).click();
+  await sB.waitForTimeout(2000);
+  await sA.getByRole('radio').nth(0).click();
+  await sB.getByRole('radio').nth(0).click();
+  for (const p of [sA, sB]) {
+    await p.getByRole('button', { name: /^Je suis prêt$/ }).click();
+    await p.waitForTimeout(200);
+  }
+  await sA.waitForTimeout(2000);
+
+  for (const [who, page, needle] of [
+    ['Châtelain', sA, /Retirer/],
+    ['Envahisseur', sB, /Plan volé/],
+  ]) {
+    const ok = await page.evaluate((src) => {
+      const needle = new RegExp(src);
+      const btns = [...document.querySelectorAll('button')];
+      const target = btns.find((b) => needle.test(b.textContent || ''));
+      const ready = btns.find((b) => /Je suis prêt|Prêt —/.test(b.textContent || ''));
+      const reachable = (el) => {
+        if (!el) return false;
+        el.scrollIntoView({ block: 'center' });
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return r.top >= 0 && r.bottom <= window.innerHeight && Boolean(hit && (hit === el || el.contains(hit)));
+      };
+      return { target: reachable(target), ready: reachable(ready) };
+    }, needle.source);
+    if (!ok.target) problems.push(`${who}, écran 1000×620 : le bas de la palette est inatteignable.`);
+    if (!ok.ready) problems.push(`${who}, écran 1000×620 : le bouton « Je suis prêt » est inatteignable.`);
+  }
+  step('écran court : palette entière et bouton « prêt » atteignables pour les deux rôles');
+  await small.close();
+}
+
 /* ---- Le parcours qui échoue doit le dire ---- */
 const lost = await context.newPage();
 lost.on('pageerror', (e) => problems.push(`[perdu] ${e.message}`));
