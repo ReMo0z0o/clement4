@@ -37,6 +37,8 @@ export function MatchShell() {
   const [code, setCode] = useState<string | null>(null);
   const [transportKind, setTransportKind] = useState<TransportKind>('local');
   const [plan, setPlan] = useState<PlanId | null>(null);
+  const [isHost, setIsHost] = useState(true);
+  const [waitingTooLong, setWaitingTooLong] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const audioRef = useRef<AudioEngine | null>(null);
 
@@ -66,6 +68,8 @@ export function MatchShell() {
       try {
         const transport = await openTransport(sessionCode, asHost);
         setTransportKind(transport.kind);
+        setIsHost(asHost);
+        setWaitingTooLong(false);
         const e = new Engine(transport);
         e.subscribe(setState);
         e.start();
@@ -98,6 +102,31 @@ export function MatchShell() {
     },
     [connect],
   );
+
+  /**
+   * Au bout de huit secondes sans personne en face, on parle. Rester
+   * silencieusement sur « Vous êtes seul » est exactement ce qui donne
+   * l'impression que le jeu est cassé alors qu'il attend simplement.
+   */
+  useEffect(() => {
+    if (!engine || state?.peer.connected) {
+      setWaitingTooLong(false);
+      return;
+    }
+    const t = setTimeout(() => setWaitingTooLong(true), 8000);
+    return () => clearTimeout(t);
+  }, [engine, state?.peer.connected]);
+
+  /* ---- Reprendre depuis un lien : ?join=CODE ---- */
+  useEffect(() => {
+    if (engine) return;
+    const param = new URLSearchParams(window.location.search).get('join');
+    if (!param) return;
+    const clean = normalizeCode(param);
+    if (codeProblem(clean)) return;
+    // La seconde fenêtre se branche toute seule : le joueur n'a rien à retaper.
+    void connect(clean, false);
+  }, [engine, connect]);
 
   /* ---- Panneau de réglage (§17) ---- */
   useEffect(() => {
@@ -151,6 +180,24 @@ export function MatchShell() {
             setPlan(id);
             engine?.setPlan(id);
             void audioRef.current?.ui('click');
+          }}
+          isHost={isHost}
+          waitingTooLong={waitingTooLong}
+          onCancel={() => {
+            engine?.stop();
+            setEngine(null);
+            setState(null);
+            setCode(null);
+            setStatus('idle');
+            setError(null);
+            setWaitingTooLong(false);
+            // On retire ?join= pour ne pas se reconnecter en boucle.
+            window.history.replaceState({}, '', window.location.pathname);
+          }}
+          onOpenSecondWindow={() => {
+            if (!code) return;
+            const url = `${window.location.origin}${window.location.pathname}?join=${code}`;
+            window.open(url, 'castle-siege-invite', 'width=1280,height=880');
           }}
           ready={state?.ready ?? false}
           peerReady={state?.peerReady ?? false}

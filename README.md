@@ -16,11 +16,20 @@ npm install
 npm run dev
 ```
 
-Ouvrez <http://localhost:3000>, créez une partie, puis **ouvrez une seconde
-fenêtre côte à côte** et rejoignez avec le code affiché. Le jeu est jouable
-immédiatement, sans aucune configuration : sans variables d'environnement il
-utilise un canal local (`BroadcastChannel`) entre deux fenêtres du même
-navigateur.
+Ouvrez <http://localhost:3000>, créez une partie, puis cliquez sur **« Ouvrir la
+seconde fenêtre »** : elle s'ouvre déjà branchée sur le code, il n'y a rien à
+retaper. Le jeu est jouable immédiatement, sans aucune configuration.
+
+### La limite du mode sans configuration
+
+Sans variables d'environnement, le jeu passe par un canal local
+(`BroadcastChannel`). **Il ne relie que deux fenêtres du même navigateur, sur le
+même ordinateur.** Deux personnes sur deux appareils ne pourront jamais se
+rejoindre dans ce mode, quel que soit le code — c'est la cause de très loin la
+plus fréquente d'un « je n'arrive pas à rejoindre ». Le lobby le dit désormais
+en clair, et signale au bout de huit secondes qu'il n'y a personne en face.
+
+Pour jouer à deux, à distance, il faut configurer Supabase ci-dessous.
 
 > Deux *fenêtres*, pas deux onglets. Un onglet caché voit son
 > `requestAnimationFrame` bridé par le navigateur : la boucle de jeu de celui
@@ -62,8 +71,12 @@ alter table sessions enable row level security;
 
 ### Déployer
 
-Le projet se déploie sur Vercel sans configuration. Reportez-y les deux
-variables `NEXT_PUBLIC_*` si vous voulez le mode à distance.
+Le projet se déploie sur Vercel sans configuration. **Mais un déploiement sans
+les deux variables `NEXT_PUBLIC_*` reste en mode local** : chaque visiteur ne
+peut jouer que contre une seconde fenêtre de son propre navigateur. Pour que
+deux personnes jouent ensemble sur l'URL déployée, renseignez
+`NEXT_PUBLIC_SUPABASE_URL` et `NEXT_PUBLIC_SUPABASE_ANON_KEY` dans les
+variables d'environnement du projet Vercel, puis redéployez.
 
 ---
 

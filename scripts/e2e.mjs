@@ -155,6 +155,46 @@ await shot(host, '06-scrutation');
 await host.keyboard.up('Space');
 step('le Châtelain entre en Scrutation');
 
+/* ---- Le parcours qui échoue doit le dire ---- */
+const lost = await context.newPage();
+lost.on('pageerror', (e) => problems.push(`[perdu] ${e.message}`));
+await lost.bringToFront();
+await lost.goto(URL, { waitUntil: 'networkidle' });
+await lost.locator('input[type="text"], input:not([type])').first().fill('QQQQQQ');
+await lost.getByRole('button', { name: /^Rejoindre$/ }).click();
+await lost.waitForTimeout(9500);
+const lostText = (await lost.innerText('body')).replace(/\s+/g, ' ');
+if (!/Vous rejoignez cette partie/.test(lostText)) {
+  problems.push('Celui qui rejoint voit l’écran de l’hôte (« Dictez ce code »).');
+}
+if (!/Aucune partie ne porte ce code/.test(lostText)) {
+  problems.push('Un code inexistant ne produit aucun message : le joueur attend sans savoir pourquoi.');
+}
+step('un code inexistant est signalé, avec sa cause');
+
+/* ---- Le bouton « Ouvrir la seconde fenêtre » branche tout seul ---- */
+const solo = await context.newPage();
+await solo.bringToFront();
+await solo.goto(URL, { waitUntil: 'networkidle' });
+await solo.getByRole('button', { name: /créer/i }).first().click();
+await solo.waitForTimeout(1200);
+const soloCode = (await solo.locator('.session-code').first().innerText()).replace(/\s/g, '');
+const invite = solo.getByRole('button', { name: /Ouvrir la seconde fenêtre/ });
+if ((await invite.count()) === 0) {
+  problems.push('En mode local, rien ne propose d’ouvrir la seconde fenêtre.');
+} else {
+  const [popup] = await Promise.all([context.waitForEvent('page'), invite.click()]);
+  await popup.waitForLoadState('networkidle');
+  await popup.waitForTimeout(2500);
+  if (!popup.url().includes(`join=${soloCode}`)) {
+    problems.push('La seconde fenêtre ne reçoit pas le code dans son adresse.');
+  }
+  if (!/adversaire est arrivé/.test((await solo.innerText('body')).replace(/\s+/g, ' '))) {
+    problems.push('La seconde fenêtre ne rejoint pas la partie toute seule.');
+  }
+  step('la seconde fenêtre rejoint la partie sans rien retaper');
+}
+
 await browser.close();
 
 console.log('');

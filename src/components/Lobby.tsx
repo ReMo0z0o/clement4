@@ -19,6 +19,14 @@ export interface LobbyProps {
   status: 'idle' | 'connecting' | 'waiting' | 'error';
   /** Notre code de session, une fois la partie ouverte. */
   code: string | null;
+  /** Avons-nous créé cette partie, ou l'avons-nous rejointe ? */
+  isHost: boolean;
+  /** Personne n'a répondu après le délai d'attente. */
+  waitingTooLong: boolean;
+  /** Repart de zéro : indispensable après un code mal tapé. */
+  onCancel: () => void;
+  /** Mode local : ouvre la seconde fenêtre, déjà branchée sur le code. */
+  onOpenSecondWindow: () => void;
   error: string | null;
   transportKind: TransportKind;
   plans: { id: PlanId; name: string; blurb: string }[];
@@ -28,6 +36,29 @@ export interface LobbyProps {
   peerReady: boolean;
   peerConnected: boolean;
   onReady: (r: boolean) => void;
+}
+
+/**
+ * Ce qu'on dit quand personne ne répond.
+ *
+ * Un message d'erreur explique quoi faire, il ne s'excuse pas (§15) — et
+ * surtout il nomme la vraie cause : en mode local, l'immense majorité des
+ * échecs vient de deux personnes qui essaient de se rejoindre depuis deux
+ * appareils, ce que ce mode ne peut pas faire.
+ */
+function waitingAdvice(isHost: boolean, kind: TransportKind): string {
+  if (kind === 'local') {
+    return isHost
+      ? 'Personne n’a rejoint. En partie locale, votre adversaire doit ouvrir une seconde ' +
+          'fenêtre de ce navigateur, sur cet ordinateur : un autre appareil ne peut pas voir ' +
+          'cette partie. Le bouton « Ouvrir la seconde fenêtre » le fait pour vous.'
+      : 'Aucune partie ne porte ce code dans ce navigateur. Vérifiez les six caractères, et ' +
+          'assurez-vous que la partie a bien été créée depuis ce même navigateur.';
+  }
+  return isHost
+    ? 'Personne n’a encore rejoint. Le code reste valable : redonnez-le à votre adversaire.'
+    : 'Aucune partie ne répond à ce code. Vérifiez les six caractères, ou demandez à votre ' +
+        'adversaire d’en créer une nouvelle.';
 }
 
 /* ==================================================================== */
@@ -97,6 +128,10 @@ export function Lobby(props: LobbyProps) {
     onJoin,
     status,
     code,
+    isHost,
+    waitingTooLong,
+    onCancel,
+    onOpenSecondWindow,
     error,
     transportKind,
     plans,
@@ -207,7 +242,9 @@ export function Lobby(props: LobbyProps) {
 
             {open && code ? (
               <div className="mt-4">
-                <p className="text-sm opacity-70">Dictez ce code à votre adversaire.</p>
+                <p className="text-sm opacity-70">
+                  {isHost ? 'Dictez ce code à votre adversaire.' : 'Vous rejoignez cette partie.'}
+                </p>
                 <p
                   className="session-code mt-2 break-all text-[clamp(2.25rem,10vw,4rem)] leading-none"
                   style={{ color: 'var(--role-accent)' }}
@@ -216,18 +253,65 @@ export function Lobby(props: LobbyProps) {
                   {code}
                 </p>
                 <div className="mt-4 flex flex-wrap items-center gap-3">
+                  {isHost && (
+                    <button
+                      type="button"
+                      onClick={copyCode}
+                      className="stone-button rounded px-4 py-2 text-sm font-medium"
+                    >
+                      {copied ? 'Code copié' : 'Copier le code'}
+                    </button>
+                  )}
+                  {isHost && transportKind === 'local' && !peerConnected && (
+                    <button
+                      type="button"
+                      onClick={onOpenSecondWindow}
+                      className="stone-button rounded px-4 py-2 text-sm font-medium"
+                      style={{ borderColor: 'var(--role-accent)' }}
+                    >
+                      Ouvrir la seconde fenêtre
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={copyCode}
-                    className="stone-button rounded px-4 py-2 text-sm font-medium"
+                    onClick={onCancel}
+                    className="rounded px-2 py-2 text-sm underline underline-offset-4 opacity-60 hover:opacity-100"
                   >
-                    {copied ? 'Code copié' : 'Copier le code'}
+                    Changer de partie
                   </button>
                   <span className="text-sm" aria-live="polite" style={{ color: 'var(--role-accent)' }}>
                     {copied ? 'Il est dans votre presse-papiers.' : ''}
                   </span>
                 </div>
-                <p className="mt-4 text-sm leading-relaxed opacity-70">{transportBlurb(transportKind)}</p>
+
+                {/* Le mode local est une contrainte forte : on le dit en grand,
+                    pas en légende. Deux appareils ne se verront jamais. */}
+                {transportKind === 'local' && (
+                  <p
+                    className="mt-4 rounded px-3 py-2 text-sm leading-relaxed"
+                    style={{
+                      color: 'var(--color-heart-gold)',
+                      background: 'color-mix(in srgb, var(--color-heart-gold) 10%, transparent)',
+                    }}
+                  >
+                    Cette partie ne sort pas de ce navigateur. Votre adversaire doit jouer dans
+                    une seconde fenêtre du même navigateur, sur cet ordinateur. Pour jouer à
+                    distance, il faut configurer Supabase — voir le README.
+                  </p>
+                )}
+
+                {waitingTooLong && !peerConnected && (
+                  <p
+                    role="alert"
+                    className="mt-3 rounded px-3 py-2 text-sm leading-relaxed"
+                    style={{
+                      color: 'var(--color-danger)',
+                      background: 'color-mix(in srgb, var(--color-danger) 12%, transparent)',
+                    }}
+                  >
+                    {waitingAdvice(isHost, transportKind)}
+                  </p>
+                )}
               </div>
             ) : (
               <div className="mt-4 space-y-6">
@@ -320,7 +404,9 @@ export function Lobby(props: LobbyProps) {
                 {!open
                   ? 'Personne pour l’instant.'
                   : !peerConnected
-                    ? 'Vous êtes seul. Donnez le code.'
+                    ? isHost
+                      ? 'Vous êtes seul. Donnez le code.'
+                      : 'Vous attendez que la partie s’ouvre.'
                     : peerReady
                       ? 'Votre adversaire est prêt.'
                       : 'Votre adversaire est arrivé. Il choisit encore.'}
