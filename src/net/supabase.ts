@@ -22,7 +22,10 @@ export function supabase(): SupabaseClient {
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) throw new Error('Supabase non configuré');
   client = createClient(url, key, {
-    realtime: { params: { eventsPerSecond: 40 } },
+    // Le jeu envoie ~31 messages/s par joueur (30 entrées ou 20 instantanés,
+    // plus les événements et le battement). Un plafond à 40 laissait passer
+    // de justesse ; à 100 il n'y a plus de risque de saccade due au débit.
+    realtime: { params: { eventsPerSecond: 100 } },
     auth: { persistSession: false },
   });
   return client;
@@ -38,29 +41,66 @@ export class SupabaseTransport extends BaseTransport {
     this.startHeartbeat();
   }
 
+  /** Au-delà, on cesse d'attendre et on dit pourquoi. */
+  static readonly CONNECT_TIMEOUT = 12000;
+
   static async open(code: string, isHost: boolean): Promise<SupabaseTransport> {
     const sb = supabase();
     const channel = sb.channel(`siege:${code}`, {
       config: { broadcast: { self: false, ack: false }, presence: { key: isHost ? 'host' : 'guest' } },
     });
 
-    const t = await new Promise<SupabaseTransport>((resolve, reject) => {
+    return new Promise<SupabaseTransport>((resolve, reject) => {
       let transport: SupabaseTransport | null = null;
+      let settled = false;
+
+      const fail = (message: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        void channel.unsubscribe();
+        reject(new Error(message));
+      };
+
+      // Sans ce délai, une adresse erronée ou un réseau qui filtre les
+      // WebSockets laissait la promesse en suspens pour toujours : le joueur
+      // restait sur « Ouverture de la partie… » sans jamais rien apprendre.
+      const timer = setTimeout(
+        () =>
+          fail(
+            'Le serveur de partie ne répond pas. Vérifiez NEXT_PUBLIC_SUPABASE_URL et ' +
+              'NEXT_PUBLIC_SUPABASE_ANON_KEY, et que votre réseau autorise les WebSockets.',
+          ),
+        SupabaseTransport.CONNECT_TIMEOUT,
+      );
+
       channel.on('broadcast', { event: 'm' }, (payload) => {
         transport?.receive(payload.payload as NetMessage);
       });
-      channel.subscribe((status) => {
+
+      channel.subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
           transport = new SupabaseTransport(code, isHost, channel);
           void channel.track({ role: isHost ? 'host' : 'guest', at: Date.now() });
           resolve(transport);
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          reject(new Error('La connexion au serveur de partie a échoué.'));
+        } else if (status === 'CHANNEL_ERROR') {
+          fail(
+            err?.message
+              ? `Le serveur de partie a refusé la connexion : ${err.message}`
+              : 'Le serveur de partie a refusé la connexion. Vérifiez la clé anonyme du projet Supabase.',
+          );
+        } else if (status === 'TIMED_OUT') {
+          fail('Le serveur de partie n’a pas répondu à temps. Réessayez.');
+        } else if (status === 'CLOSED' && !transport) {
+          // Fermé avant même d'avoir été ouvert : sans ce cas, on attendait
+          // le délai complet pour rien.
+          fail('La connexion au serveur de partie s’est fermée avant de s’établir.');
         }
       });
     });
-
-    return t;
   }
 
   protected transmit(msg: NetMessage): void {

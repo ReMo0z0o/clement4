@@ -37,21 +37,55 @@ Pour jouer à deux, à distance, il faut configurer Supabase ci-dessous.
 > restent visibles toutes les deux — et de toute façon, on veut voir les deux
 > écrans.
 
-### Jouer à distance
+### Jouer à distance — configurer Supabase
 
-Renseignez deux variables et la partie passe par Supabase Realtime ; les deux
-joueurs peuvent alors être sur deux machines et deux réseaux différents.
+Cinq minutes, une seule fois. Aucune base de données n'est nécessaire : le jeu
+n'utilise que le service temps réel (Broadcast), disponible sur le plan gratuit.
 
-```bash
-cp .env.example .env.local
-# NEXT_PUBLIC_SUPABASE_URL=...
-# NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-```
+1. **Créez un projet** sur <https://supabase.com/dashboard> → *New project*.
+   N'importe quelle région proche de vous. Attendez la fin de l'installation.
+2. **Relevez les deux valeurs** dans *Project Settings → API* :
+   - *Project URL* → `https://xxxxxxxx.supabase.co`
+   - *Project API keys → **anon** / publishable* → `eyJhbGciOi...`
 
-Aucune autre étape n'est nécessaire : le jeu n'a besoin que du service temps
-réel, pas de base de données. La table `sessions` ci-dessous est **facultative**
-— elle sert à conserver le score en cas de rechargement, et son absence est
-silencieusement tolérée.
+   > Prenez bien la clé **anon**, jamais la clé `service_role`. La clé anonyme
+   > est publique par nature — elle part dans le navigateur, c'est son rôle.
+   > La clé de service donnerait à n'importe quel visiteur un accès complet.
+3. **Écrivez-les** dans un fichier `.env.local` à la racine du projet :
+
+   ```bash
+   NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxx.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOi...
+   ```
+
+4. **Vérifiez que ça marche vraiment** :
+
+   ```bash
+   npm run supabase:check
+   ```
+
+   Ce script ne regarde pas si la clé « a l'air bonne » : il ouvre deux clients
+   distincts sur un même canal, comme deux joueurs, et fait passer un message de
+   l'un à l'autre. Il vous dit en clair ce qui bloque le cas échéant — projet en
+   pause, mauvaise clé, WebSockets filtrés.
+
+5. **Reportez les deux variables sur Vercel** : *Settings → Environment
+   Variables*, pour les trois environnements, puis **redéployez**. Sans ça,
+   l'URL déployée reste en mode local et deux personnes ne pourront pas se
+   rejoindre.
+
+Une fois en ligne, le lobby le dit : « votre adversaire peut être n'importe où ».
+
+#### Si un projet gratuit se met en pause
+
+Supabase suspend les projets gratuits après une période sans activité. Le jeu
+affichera alors « Le serveur de partie ne répond pas ». Il suffit de rouvrir le
+tableau de bord Supabase pour le réveiller.
+
+#### La table `sessions` est facultative
+
+Elle ne sert qu'à conserver le score en cas de rechargement, et son absence est
+silencieusement tolérée. Le jeu fonctionne entièrement sans elle.
 
 ```sql
 create table sessions (
@@ -92,6 +126,7 @@ variables d'environnement du projet Vercel, puis redéployez.
 | `npm run playtest` | Fait jouer deux robots des dizaines de manches |
 | `npm run duel` | Vérifie que le Châtelain perd un duel loyal |
 | `npm run e2e` | Joue une session complète dans un vrai navigateur (serveur `dev` requis) |
+| `npm run supabase:check` | Vérifie qu'une configuration Supabase permet réellement de jouer |
 
 ---
 

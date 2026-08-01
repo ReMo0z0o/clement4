@@ -13,7 +13,8 @@
     "playtest": "tsx scripts/playtest.ts",
     "duel": "tsx scripts/duel.ts",
     "check": "npm run typecheck && npm run plans && npm run duel && npm test",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "supabase:check": "node scripts/supabase-check.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

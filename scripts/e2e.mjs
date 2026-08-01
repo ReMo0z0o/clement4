@@ -195,6 +195,36 @@ if ((await invite.count()) === 0) {
   step('la seconde fenêtre rejoint la partie sans rien retaper');
 }
 
+/* ---- Deux navigateurs distincts : la preuve du mode à distance ----
+ * Ce test n'a de sens que si Supabase est configuré. Deux contextes séparés
+ * ne partagent aucun BroadcastChannel : s'ils se rejoignent, c'est que le
+ * trajet passe bien par le réseau, donc que deux personnes le peuvent aussi. */
+const remote = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+if (remote) {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const far1 = await ctxA.newPage();
+  const far2 = await ctxB.newPage();
+  await far1.goto(URL, { waitUntil: 'networkidle' });
+  await far2.goto(URL, { waitUntil: 'networkidle' });
+  await far1.getByRole('button', { name: /créer/i }).first().click();
+  await far1.waitForTimeout(2500);
+  const farCode = (await far1.locator('.session-code').first().innerText()).replace(/\s/g, '');
+  await far2.locator('input[type="text"], input:not([type])').first().fill(farCode);
+  await far2.getByRole('button', { name: /^Rejoindre$/ }).click();
+  await far2.waitForTimeout(6000);
+  const farText = (await far1.innerText('body')).replace(/\s+/g, ' ');
+  if (!/adversaire est arrivé|adversaire est prêt/.test(farText)) {
+    problems.push('Supabase est configuré, mais deux navigateurs distincts ne se rejoignent pas.');
+  } else {
+    step(`deux navigateurs distincts se rejoignent (code ${farCode}) — le mode à distance fonctionne`);
+  }
+  await ctxA.close();
+  await ctxB.close();
+} else {
+  step('mode à distance non testé : Supabase n’est pas configuré (npm run supabase:check)');
+}
+
 await browser.close();
 
 console.log('');
