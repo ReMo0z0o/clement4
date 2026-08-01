@@ -16,6 +16,7 @@ import {
   makeCode,
   normalizeCode,
   openTransport,
+  supabaseConfigured,
   type TransportKind,
 } from '@/net/transport';
 import type { AudioEngine } from '@/audio/engine';
@@ -35,7 +36,13 @@ export function MatchShell() {
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
-  const [transportKind, setTransportKind] = useState<TransportKind>('local');
+  // Le mode est connu dès le chargement, pas seulement après connexion : sinon
+  // un joueur dont Supabase est configuré lit « partie locale, ouvrez une
+  // seconde fenêtre » sur l'écran d'accueil et en conclut que le jeu à distance
+  // ne marche pas.
+  const [transportKind, setTransportKind] = useState<TransportKind>(() =>
+    supabaseConfigured() ? 'supabase' : 'local',
+  );
   const [plan, setPlan] = useState<PlanId | null>(null);
   const [isHost, setIsHost] = useState(true);
   const [waitingTooLong, setWaitingTooLong] = useState(false);

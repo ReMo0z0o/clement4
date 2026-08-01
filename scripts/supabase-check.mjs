@@ -150,6 +150,10 @@ try {
   console.error('  3. Votre réseau autorise-t-il les WebSockets sortants (wss://) ?');
   console.error('  4. Realtime est-il activé ? Il l’est par défaut ; aucune table n’est requise,');
   console.error('     le jeu n’utilise que Broadcast.');
+  console.error('  5. Un projet Supabase expose deux formes de clé publique : la nouvelle');
+  console.error('     « sb_publishable_… » et l’ancienne clé JWT « anon ». Les deux devraient');
+  console.error('     fonctionner ; en cas de doute, essayez l’autre :');
+  console.error('       node scripts/supabase-check.mjs <URL> <AUTRE_CLE>');
 } finally {
   await hostClient.removeAllChannels().catch(() => {});
   await guestClient.removeAllChannels().catch(() => {});
