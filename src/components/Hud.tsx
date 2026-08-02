@@ -31,7 +31,8 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
   const invader = state.role === 'invader';
   const hp = Math.round(snap.self.hp);
   const lowHp = hp < CFG.feel.lowHpVignette;
-  const urgent = snap.timeLeft <= CFG.audio.finalRush;
+  const contested = snap.capture.contested;
+  const urgent = snap.timeLeft <= CFG.audio.finalRush && !contested;
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none">
@@ -39,8 +40,8 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
       <div className="absolute left-1/2 top-3 -translate-x-1/2 text-center">
         <div
           className={`font-code text-3xl leading-none tabular-nums ${
-            urgent ? 'text-danger' : 'text-parchment'
-          } ${urgent ? 'ember-pulse' : ''}`}
+            contested ? 'text-keep-ember' : urgent ? 'text-danger' : 'text-parchment'
+          } ${urgent ? 'ember-pulse' : ''} ${contested ? 'opacity-70' : ''}`}
         >
           {clock(snap.timeLeft)}
         </div>
@@ -48,6 +49,21 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
           Manche {state.round} · {state.score.host} – {state.score.guest}
         </div>
       </div>
+
+      {/* Cœur disputé : le chrono s'arrête. Il faut le dire, sinon l'arrêt
+          passe pour un bug plutôt que pour la règle qu'il est. */}
+      {contested && (
+        <div className="slide-up absolute left-1/2 top-14 -translate-x-1/2 rounded-sm border border-keep-ember/60 bg-black/75 px-3 py-1.5 text-center">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-keep-ember">
+            Cœur disputé — le temps est suspendu
+          </div>
+          <div className="mt-0.5 text-[11px] opacity-70">
+            {invader
+              ? 'Chassez-le de la salle, ou tombez.'
+              : 'Rien ne se recharge ici tant qu’il tient la salle.'}
+          </div>
+        </div>
+      )}
 
       {/* Le réveil du château. */}
       {snap.alarm && (
@@ -213,15 +229,65 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
         </div>
       )}
 
-      {/* Le guet a sonné : le Châtelain sait où l'ennemi est passé. */}
-      {!invader && snap.ping && (
+      {/* Les yeux de guet : ce qu'ils voient, et ce qu'il leur reste à voir. */}
+      {!invader && (snap.sensors?.length ?? 0) > 0 && (
+        <div className="absolute left-5 top-5 w-52">
+          <div className="mb-1 text-[10px] uppercase tracking-widest opacity-45">
+            {CFG.sensors.plural}
+          </div>
+          <div className="space-y-1">
+            {snap.sensors!.map((g) => {
+              const k = Math.max(0, g.watchLeft / CFG.sensors.watchTime);
+              return (
+                <div key={g.id} className="flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-black/55">
+                    <div
+                      className={`h-full transition-[width] duration-300 ${
+                        g.watching ? 'bg-danger' : 'bg-keep-ember'
+                      }`}
+                      style={{ width: `${k * 100}%` }}
+                    />
+                  </div>
+                  <span
+                    className={`font-code w-9 text-right text-[11px] tabular-nums ${
+                      g.watchLeft <= 0 ? 'opacity-30' : g.watching ? 'text-danger' : 'opacity-65'
+                    }`}
+                  >
+                    {g.watchLeft <= 0 ? '—' : `${Math.ceil(g.watchLeft)}s`}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {snap.sensors!.some((g) => g.watching) && (
+            <div className="mt-1.5 text-[11px] font-semibold tracking-wide text-danger ember-pulse">
+              Un œil le tient — vous le voyez en direct
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* La piste laissée par un guet, une fois qu'il l'a perdu de vue. */}
+      {!invader && snap.ping && !snap.sensors?.some((g) => g.watching) && (
         <div className="slide-up absolute left-1/2 top-24 -translate-x-1/2 rounded-sm border border-danger/60 bg-black/75 px-3 py-1.5 text-center">
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-danger">
-            Un guet a sonné
+            Piste perdue
           </div>
           <div className="mt-0.5 text-[11px] opacity-70">
-            Passage repéré {snap.ping.age < 1.5 ? 'à l’instant' : `il y a ${Math.round(snap.ping.age)} s`} —
+            Vu {snap.ping.age < 1.5 ? 'à l’instant' : `il y a ${Math.round(snap.ping.age)} s`} —
             le point rouge sur votre plan
+          </div>
+        </div>
+      )}
+
+      {/* L'Envahisseur est dans un cercle de guet : il doit le savoir. */}
+      {invader && snap.spotted && (
+        <div className="slide-up absolute left-1/2 top-24 -translate-x-1/2 rounded-sm border border-danger/60 bg-black/75 px-3 py-1.5 text-center">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-danger ember-pulse">
+            Un œil vous suit
+          </div>
+          <div className="mt-0.5 text-[11px] opacity-70">
+            Il vous voit à travers les murs — sortez du cercle rouge
           </div>
         </div>
       )}

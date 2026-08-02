@@ -187,13 +187,14 @@ export class SnapshotFilter {
     }
 
     /* ---- obstacles visibles ---- */
-    const blockers: { x: number; y: number; until: number }[] = [];
+    const blockers: Snapshot['blockers'] = [];
     for (const [i, b] of world.castle.blockers) {
       if (isInvader && !world.explored.has(i)) continue;
       blockers.push({
         x: (i % world.plan.w) + 0.5,
         y: Math.floor(i / world.plan.w) + 0.5,
         until: b.until === Infinity ? -1 : b.until,
+        kind: b.kind,
       });
     }
 
@@ -263,7 +264,8 @@ export class SnapshotFilter {
         id: g.id,
         x: g.x,
         y: g.y,
-        ready: world.now >= g.readyAt,
+        watchLeft: g.watchLeft,
+        watching: world.watchedBy === g.id,
       }));
       snap.ping =
         world.ping && world.now - world.ping.at <= CFG.sensors.pingDuration
@@ -272,6 +274,10 @@ export class SnapshotFilter {
     } else {
       snap.hintedBraziers = this.intel.brazier !== undefined ? [this.intel.brazier] : [];
       snap.hintedHearts = this.intel.eliminatedHeart ?? [];
+      // Il n'apprend l'existence d'un guet qu'en entrant dans son cercle, et
+      // seulement de celui-là : les deux autres restent à découvrir.
+      const watching = world.sensors.find((g) => g.id === world.watchedBy);
+      snap.spotted = watching ? { x: watching.x, y: watching.y } : null;
     }
 
     return snap;
@@ -309,6 +315,15 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
     if (snap.devices) problems.push("Les mécanismes du Châtelain sont transmis à l'Envahisseur.");
     if (snap.sensors) problems.push("Les guets du Châtelain sont transmis à l'Envahisseur.");
     if (snap.ping) problems.push("L'indicateur des guets est transmis à l'Envahisseur.");
+    if (snap.spotted && world.watchedBy < 0) {
+      problems.push("Un guet est transmis à l'Envahisseur alors qu'il n'est dans le cercle d'aucun.");
+    }
+    if (snap.spotted) {
+      const g = world.sensors.find((s) => s.x === snap.spotted!.x && s.y === snap.spotted!.y);
+      if (!g || g.id !== world.watchedBy) {
+        problems.push("La position transmise n'est pas celle du guet qui a repéré l'Envahisseur.");
+      }
+    }
     if (snap.ownTraps) problems.push("Les pièges du Châtelain sont transmis à l'Envahisseur.");
     if (snap.self.influence !== 0) problems.push("L'Influence du Châtelain est transmise à l'Envahisseur.");
     if (snap.heart && !world.seenHeart && world.captureProgress === 0 && !(snap.hintedHearts?.length)) {
@@ -339,6 +354,7 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
       problems.push("La position de l'Envahisseur est transmise alors qu'il n'est pas perçu.");
     }
     if (snap.tells.length) problems.push('Des indices sont transmis au Châtelain via `tells`.');
+    if (snap.spotted) problems.push("L'avertissement de repérage est transmis au Châtelain.");
   }
 
   return problems;

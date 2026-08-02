@@ -3,7 +3,7 @@
 Un joueur piège son château. L'autre s'y infiltre. Duel 1 contre 1 asymétrique,
 dans le navigateur, avec un code de partie à six caractères.
 
-Le **Châtelain** place trois guets dans son château et le défend depuis
+Le **Châtelain** place trois yeux de guet dans son château et le défend depuis
 l'intérieur. L'**Envahisseur** doit capturer le Cœur du Château — vingt secondes
 de présence — ou tuer le Châtelain, avant la fin du chrono.
 
@@ -11,8 +11,16 @@ de présence — ou tuer le Châtelain, avant la fin du chrono.
 arbalète au clic droit. Le carreau d'arbalète **rebondit jusqu'à trois fois sur
 les murs** — et après le premier rebond, il ne fait plus la différence entre les
 deux joueurs. Le Châtelain compense par le terrain : il connaît son château, ses
-trois **guets** lui signalent tout passage ennemi à portée, et sa Scrutation lui
-montre tout — au prix de son corps laissé sans défense.
+trois **yeux de guet** le montrent **à travers les murs** tant qu'il est dans
+leur cercle, et sa Scrutation lui montre tout — au prix de son corps laissé sans
+défense.
+
+Deux règles décident du rythme de la fin de manche. Un œil de guet n'a que
+**dix-huit secondes de veille en réserve** : l'Envahisseur, qui est prévenu
+quand on le regarde, peut choisir d'en user un avant son vrai passage. Et tant
+que **les deux joueurs se disputent la salle du Cœur, le chrono s'arrête** — et
+le Cœur ne soigne plus personne. Attendre ne rapporte rien : il faut frapper,
+ou partir.
 
 ---
 

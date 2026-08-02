@@ -179,14 +179,14 @@ function CastellanPalette({
   return (
     <div className="space-y-4">
       <Group
-        title={`Guets — ${placed} / ${CFG.sensors.count}`}
-        hint="Cliquez sur le plan pour poser. Un guet signale tout passage, où que vous soyez."
+        title={`${CFG.sensors.plural} — ${placed} / ${CFG.sensors.count}`}
+        hint="Cliquez sur le plan pour poser. Tant qu’il est dans le cercle, vous le voyez en direct — même derrière un mur."
       >
         <PaletteButton
           active={brush.kind === 'sensor'}
           cost={0}
-          title="Poser un guet"
-          sub={`Détection à ${CFG.sensors.radius} pas · se tait ${CFG.sensors.cooldown} s après avoir sonné`}
+          title={`Poser un ${CFG.sensors.label.toLowerCase()}`}
+          sub={`Cercle de ${CFG.sensors.radius} pas · ${CFG.sensors.watchTime} s de veille en réserve, puis il s’éteint`}
           onClick={() => setBrush({ kind: 'sensor' })}
         />
         <PaletteButton
@@ -234,8 +234,10 @@ function InvaderBriefing({ state }: { state: EngineState }) {
           couloir, et il ne fait pas la différence entre vous deux.
         </li>
         <li>
-          Le château est équipé de guets : passez à portée et le Châtelain saura où. Vous ne les
-          verrez pas, et rien ne vous dira que vous avez été repéré.
+          Le château est équipé de {CFG.sensors.count} {CFG.sensors.plural.toLowerCase()}. Dans leur
+          cercle, le Châtelain vous voit en direct — même derrière un mur. Vous le saurez : l’œil
+          s’affiche en rouge. Chacun n’a que {CFG.sensors.watchTime} secondes de veille en réserve,
+          alors user un cercle exprès avant le vrai passage est une option.
         </li>
         <li>
           Trois braseros donnent {CFG.brazier.timeBonus} secondes chacun, deux au maximum. Ils
@@ -244,7 +246,7 @@ function InvaderBriefing({ state }: { state: EngineState }) {
       </ul>
       {state.round >= 3 && (
         <p className="border-l-2 border-[var(--role-accent)] pl-3 text-sm text-[var(--role-accent)]">
-          Vous connaissez déjà ce château. Il a eu le temps de déplacer ses guets.
+          Vous connaissez déjà ce château. Il a eu le temps de déplacer ses yeux.
         </p>
       )}
     </div>

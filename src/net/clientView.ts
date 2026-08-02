@@ -45,8 +45,25 @@ interface TellView {
 
 export class ClientView {
   readonly role: Role;
-  /** Tuiles connues. Ce qui n'a pas été révélé reste un mur infranchissable. */
+  /** Ce qui est *affiché* : tout est mur tant que rien n'a été révélé. */
   readonly castle: CastleRuntime;
+  /**
+   * Ce qui sert à *prédire le déplacement* : tout est sol tant que rien n'a été
+   * révélé. Les deux cartes reçoivent exactement les mêmes révélations et ne
+   * diffèrent que par leur valeur par défaut.
+   *
+   * Cette séparation corrige l'accrochage le plus pénible du jeu. Prédire avec
+   * la carte d'affichage revenait à traiter chaque tuile pas encore reçue comme
+   * un mur : l'Envahisseur invité se cognait dans du sol dégagé, puis
+   * l'instantané suivant le remettait deux pas plus loin. Le joueur avançait
+   * par à-coups de 50 ms au lieu de marcher.
+   *
+   * Le défaut inverse est presque toujours juste : l'hôte transmet aussi les
+   * murs qui bordent ce qu'on vient de voir, donc un mur qu'on peut heurter est
+   * déjà connu. Et dans le cas rare où la prédiction se trompe, l'hôte tranche
+   * — il est le seul à faire autorité.
+   */
+  private readonly predictCastle: CastleRuntime;
   known = new Set<number>();
 
   snap: Snapshot | null = null;
@@ -74,9 +91,10 @@ export class ClientView {
 
   constructor(plan: CastlePlan, role: Role, spawn: Vec) {
     this.role = role;
-    // Un plan « vide » : tout est mur tant que rien n'a été révélé.
     const blank: CastlePlan = { ...plan, tiles: new Array(plan.tiles.length).fill(T.WALL) };
     this.castle = new CastleRuntime(blank);
+    const open: CastlePlan = { ...plan, tiles: new Array(plan.tiles.length).fill(T.FLOOR) };
+    this.predictCastle = new CastleRuntime(open);
     this.pos = { ...spawn };
     this.render = { ...spawn };
   }
@@ -93,22 +111,26 @@ export class ClientView {
 
     for (const t of snap.newTiles) {
       this.castle.tiles[t.i] = t.t;
+      this.predictCastle.tiles[t.i] = t.t;
       this.known.add(t.i);
     }
     for (const t of snap.tileEdits) {
       this.castle.tiles[t.i] = t.t;
+      this.predictCastle.tiles[t.i] = t.t;
       this.known.add(t.i);
     }
     if (snap.newTiles.length || snap.tileEdits.length) this.castle.markLightDirty();
 
     this.castle.blockers.clear();
+    this.predictCastle.blockers.clear();
     for (const b of snap.blockers) {
-      this.castle.addBlocker(
-        Math.floor(b.x),
-        Math.floor(b.y),
-        b.until < 0 ? Infinity : Infinity,
-        'lock',
-      );
+      const x = Math.floor(b.x);
+      const y = Math.floor(b.y);
+      // La durée transmise est relative au temps de manche de l'hôte ; la liste
+      // étant reconstruite à chaque instantané, un obstacle disparu n'y est
+      // simplement plus. On le tient donc pour posé jusqu'au prochain envoi.
+      this.castle.addBlocker(x, y, Infinity, b.kind);
+      this.predictCastle.addBlocker(x, y, Infinity, b.kind);
     }
 
     // Lumière : torches connues + braseros allumés + Cœur si on l'a trouvé.
@@ -120,6 +142,13 @@ export class ClientView {
 
     /* --- Réconciliation de sa propre position --- */
     this.pending = this.pending.filter((f) => f.seq > snap.ackSeq);
+
+    // Chez l'hôte, personne n'empile d'entrée en attente : sa vue est
+    // reconstruite directement depuis la simulation. Sans cette ligne, `aim`
+    // n'était jamais écrit et son propre personnage restait tourné vers l'est
+    // pendant toute la manche, quoi que fasse la souris — on tirait dans une
+    // direction et on regardait dans une autre.
+    if (!this.pending.length) this.aim = snap.self.aim;
     const authoritative = { x: snap.self.x, y: snap.self.y };
     let replayed = { ...authoritative };
     for (const f of this.pending) {
@@ -214,7 +243,7 @@ export class ClientView {
     const mv = m > 1 ? { x: f.move.x / m, y: f.move.y / m } : f.move;
     const delta = { x: mv.x * speed * dt, y: mv.y * speed * dt };
     const r = this.role === 'invader' ? CFG.invader.radius : CFG.castellan.radius;
-    return this.castle.moveCircle(from, delta, r, this.role, this.snap?.now ?? 0);
+    return this.predictCastle.moveCircle(from, delta, r, this.role, this.snap?.now ?? 0);
   }
 
   /* ================================================================== */

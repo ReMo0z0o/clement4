@@ -91,10 +91,12 @@ export class World {
   /** Tuiles déjà traversées : mémoire du plan pour le brouillard. */
   explored = new Set<number>();
 
-  /** Les guets du Châtelain : détecteurs de passage posés à la préparation. */
-  sensors: { id: number; x: number; y: number; readyAt: number }[] = [];
-  /** Dernier passage détecté par un guet — l'indicateur du Châtelain. */
+  /** Les guets du Châtelain : yeux posés à la préparation. */
+  sensors: { id: number; x: number; y: number; watchLeft: number }[] = [];
+  /** Dernier point de passage vu par un guet — la piste du Châtelain. */
   ping: { x: number; y: number; at: number } | null = null;
+  /** Guet qui tient l'Envahisseur dans son cercle en ce moment, ou -1. */
+  watchedBy = -1;
 
   now = 0;
   timeLeft: number;
@@ -146,7 +148,7 @@ export class World {
     }
 
     for (const g of init.build.sensors ?? []) {
-      this.sensors.push({ id: g.id, x: g.x, y: g.y, readyAt: 0 });
+      this.sensors.push({ id: g.id, x: g.x, y: g.y, watchLeft: CFG.sensors.watchTime });
     }
     for (const di of init.build.lockedDoors) {
       const d = init.plan.doors[di];
@@ -172,8 +174,18 @@ export class World {
     if (this.over) return;
 
     this.now += dt;
-    this.timeLeft -= dt;
     this.stats.timeElapsed += dt;
+
+    // Le chrono s'arrête tant que les deux camps se disputent le Cœur.
+    //
+    // Sans ça, le Châtelain gagnait la contestation en ne faisant rien : il
+    // suffisait d'entrer dans la salle et d'attendre, puisque le temps qui
+    // s'écoule le fait gagner. C'est exactement l'anti-patron de §2 — « un
+    // Châtelain qui campe doit être structurellement perdant ». Le temps
+    // suspendu retire toute valeur à l'attente et force l'un des deux à
+    // trancher : partir, ou frapper.
+    this.contested = this.contestedNow();
+    if (!this.contested) this.timeLeft -= dt;
 
     this.updateAlarm();
     this.updateScry(casIn, dt);
@@ -181,7 +193,7 @@ export class World {
     this.updateActor(this.castellan, casIn, dt);
     this.fireCrossbow(this.invader, invIn);
     this.fireCrossbow(this.castellan, casIn);
-    this.updateSensors();
+    this.updateSensors(dt);
     this.updateTools(invIn, dt);
     this.updateDevices(casIn);
     this.updateEntities(dt);
@@ -477,19 +489,35 @@ export class World {
   }
 
   /**
-   * Les guets. Quand l'Envahisseur passe à portée d'un guet armé, le Châtelain
-   * reçoit un indicateur — où qu'il soit. Le guet se tait ensuite quelques
-   * secondes : il signale un passage, il ne diffuse pas une position en continu.
+   * Les guets. Tant que l'Envahisseur est dans le cercle d'un guet dont la
+   * réserve n'est pas épuisée, le Châtelain le voit en direct — à travers les
+   * murs, où qu'il soit lui-même.
+   *
+   * Trois choses se décident ici, et chacune répond à une tension de §2 :
+   *  - la réserve se consomme *seulement* pendant la veille effective, donc
+   *    un guet posé sur un couloir jamais emprunté ne coûte rien mais ne
+   *    rapporte rien non plus : le placement est un vrai pari ;
+   *  - l'Envahisseur est prévenu (`spottedBy`), ce qui transforme la détection
+   *    en décision — fuir, contourner, ou user la réserve exprès ;
+   *  - à la sortie du cercle, le dernier point vu reste affiché quelques
+   *    secondes puis s'efface : le Châtelain garde une piste, pas une laisse.
    */
-  private updateSensors(): void {
+  private updateSensors(dt: number): void {
     const inv = this.invader;
+    this.watchedBy = -1;
     if (!inv.alive) return;
     for (const g of this.sensors) {
-      if (this.now < g.readyAt) continue;
+      if (g.watchLeft <= 0) continue;
       if (dist(inv.pos, { x: g.x, y: g.y }) > CFG.sensors.radius) continue;
-      g.readyAt = this.now + CFG.sensors.cooldown;
+
+      if (this.watchedBy < 0) {
+        // Un seul guet paie la veille par tick : trois cercles superposés ne
+        // doivent pas vider trois réserves pour la même information.
+        this.watchedBy = g.id;
+        g.watchLeft = Math.max(0, g.watchLeft - dt);
+        if (g.watchLeft === 0) this.events.push({ k: 'sensor', x: g.x, y: g.y });
+      }
       this.ping = { x: inv.pos.x, y: inv.pos.y, at: this.now };
-      this.events.push({ k: 'sensor', x: inv.pos.x, y: inv.pos.y });
     }
   }
 
@@ -1084,6 +1112,16 @@ export class World {
   /* Le Cœur (§6)                                                       */
   /* ================================================================== */
 
+  /** Les deux camps sont-ils dans la salle du Cœur en même temps ? */
+  private contestedNow(): boolean {
+    return (
+      this.invader.alive &&
+      this.castellan.alive &&
+      dist(this.invader.pos, this.heart) <= CFG.heart.roomRadius &&
+      dist(this.castellan.pos, this.heart) <= CFG.heart.roomRadius
+    );
+  }
+
   private updateCapture(dt: number): void {
     const inv = this.invader;
     const invIn = inv.alive && dist(inv.pos, this.heart) <= CFG.heart.roomRadius;
@@ -1126,7 +1164,13 @@ export class World {
     if (!c.alive) return;
     const atHeart = dist(c.pos, this.heart) <= CFG.heart.roomRadius;
     let regen = CFG.castellan.influenceRegen;
-    if (atHeart) {
+    // Le Cœur ne soigne plus celui qui le défend pendant qu'on le lui dispute.
+    //
+    // Le chrono étant suspendu pendant la contestation, un Châtelain qui
+    // regagnerait 3 PV/s en face-à-face gagnerait toute attente longue sans
+    // jamais frapper : on aurait déplacé le camping d'un cran, pas supprimé.
+    // Dans la salle, à deux, personne ne se refait — seul le duel tranche.
+    if (atHeart && !this.contested) {
       regen = this.breached
         ? CFG.castellan.influenceRegenHeartBreached
         : CFG.castellan.influenceRegenHeart;
@@ -1221,10 +1265,12 @@ export class World {
   }
 
   /** Le Châtelain perçoit-il l'Envahisseur, et par quel canal ? */
-  castellanSees(): 'scry' | 'reveal' | 'sight' | null {
+  castellanSees(): 'scry' | 'reveal' | 'sensor' | 'sight' | null {
     if (!this.invader.alive) return null;
     if (this.scrying) return 'scry';
     if (this.now < this.revealUntil) return 'reveal';
+    // Un guet voit à travers les murs : c'est tout son intérêt.
+    if (this.watchedBy >= 0) return 'sensor';
     const c = this.castellan;
     const d = dist(c.pos, this.invader.pos);
     if (d <= CFG.vision.castellanRange && this.castle.losClear(c.pos, this.invader.pos)) return 'sight';

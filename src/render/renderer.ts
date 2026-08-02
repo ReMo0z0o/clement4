@@ -258,6 +258,7 @@ export class Renderer {
     this.drawActors(view, pal, role, scrying);
     this.drawParticles();
     this.compositeLight(view, pal, scrying);
+    this.drawSpotted(snap, role);
 
     ctx.restore();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -632,34 +633,52 @@ export class Renderer {
   }
 
   /**
-   * Les guets du Châtelain et, s'il y en a un, le dernier passage détecté.
-   * Rien de tout cela n'existe côté Envahisseur : l'hôte ne le transmet pas.
+   * Les yeux de guet.
+   *
+   * Les deux camps en voient quelque chose, mais pas la même chose : le
+   * Châtelain a ses trois cercles et sa réserve de veille, l'Envahisseur ne
+   * découvre que celui qui le tient, à l'instant où il entre dedans.
    */
   private drawSensors(snap: Snapshot | null, pal: Palette, role: Role): void {
-    if (!snap || role !== 'castellan') return;
+    if (!snap) return;
     const ctx = this.ctx;
+
+    if (role !== 'castellan') return;
 
     for (const g of snap.sensors ?? []) {
       const px = g.x * TILE;
       const py = g.y * TILE;
+      const spent = g.watchLeft <= 0;
       ctx.save();
-      // L'œil du guet : une pupille dorée dans un anneau — éteinte en recharge.
-      ctx.globalAlpha = g.ready ? 0.95 : 0.35;
-      ctx.strokeStyle = pal.accent;
-      ctx.lineWidth = 1.6;
+      // L'œil du guet : une pupille dorée dans un anneau. Elle s'ouvre en grand
+      // quand elle tient l'Envahisseur, et s'éteint quand la réserve est vide.
+      ctx.globalAlpha = spent ? 0.28 : 0.95;
+      ctx.strokeStyle = g.watching ? '#e0503c' : pal.accent;
+      ctx.lineWidth = g.watching ? 2.4 : 1.6;
       ctx.beginPath();
       ctx.arc(px, py, 6.5, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillStyle = g.ready ? pal.accent : pal.accentDim;
+      ctx.fillStyle = spent ? pal.accentDim : g.watching ? '#e0503c' : pal.accent;
       ctx.beginPath();
-      ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+      ctx.arc(px, py, g.watching ? 3.4 : 2.4, 0, Math.PI * 2);
       ctx.fill();
-      if (g.ready) {
+
+      if (!spent) {
+        // La réserve de veille : un arc qui se vide autour de l'œil. C'est la
+        // seule ressource du Châtelain qui se dépense sans qu'il la dépense.
+        const k = g.watchLeft / CFG.sensors.watchTime;
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = g.watching ? '#e0503c' : pal.accent;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.arc(px, py, 9.5, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
+        ctx.stroke();
+
         const breathe = 0.5 + 0.5 * Math.sin(this.time * 2.2 + g.id * 2);
-        ctx.globalAlpha = 0.14 + breathe * 0.1;
+        ctx.globalAlpha = g.watching ? 0.3 + breathe * 0.12 : 0.14 + breathe * 0.1;
         ctx.beginPath();
         ctx.arc(px, py, CFG.sensors.radius * TILE, 0, Math.PI * 2);
-        ctx.setLineDash([4, 8]);
+        ctx.setLineDash(g.watching ? [] : [4, 8]);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -690,6 +709,42 @@ export class Renderer {
       ctx.fill();
       ctx.restore();
     }
+  }
+
+  /**
+   * « On vous regarde, et voilà d'où. »
+   *
+   * Dessiné *après* la lumière, volontairement : le guet qui tient
+   * l'Envahisseur est souvent derrière un mur, donc dans le noir de sa carte.
+   * Un avertissement à moitié effacé par le brouillard ne serait pas un
+   * avertissement. C'est la seule chose qu'il apprenne d'un guet — et elle
+   * suffit à contourner, ou à revenir user la réserve exprès.
+   */
+  private drawSpotted(snap: Snapshot | null, role: Role): void {
+    if (!snap || role !== 'invader') return;
+    const s = snap.spotted;
+    if (!s) return;
+    const ctx = this.ctx;
+    const px = s.x * TILE;
+    const py = s.y * TILE;
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 5);
+
+    ctx.save();
+    ctx.strokeStyle = '#e0503c';
+    ctx.globalAlpha = 0.26 + pulse * 0.18;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(px, py, CFG.sensors.radius * TILE, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.75 + pulse * 0.25;
+    ctx.beginPath();
+    ctx.arc(px, py, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#e0503c';
+    ctx.beginPath();
+    ctx.arc(px, py, 3 + pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   private drawEntities(view: ClientView, pal: Palette): void {
@@ -811,6 +866,37 @@ export class Renderer {
 
     ctx.translate(px, py);
     ctx.rotate(aim);
+
+    // L'orientation, au sol, avant le corps.
+    //
+    // Un sprite vu du dessus qui tourne ne suffit pas à dire où il regarde : à
+    // cette taille, le heaume et la capuche se lisent mal, et on ne sait plus
+    // dans quelle direction on va frapper ni tirer. Le cône répond à la seule
+    // question qui compte en duel — « où pointe ma lame ? » — et il suit la
+    // souris exactement, sans lissage.
+    if (state !== 'dead' && state !== 'scrying') {
+      const reach = r * (isSelf ? 3.4 : 2.6);
+      const half = CFG.combat.sword.arc / 2;
+      const cone = ctx.createLinearGradient(0, 0, reach, 0);
+      cone.addColorStop(0, withAlpha(color, isSelf ? 0.34 : 0.2));
+      cone.addColorStop(1, withAlpha(color, 0));
+      ctx.fillStyle = cone;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, reach, -half, half);
+      ctx.closePath();
+      ctx.fill();
+
+      // Et la pointe : un repère franc, lisible même quand le cône se noie
+      // dans une pièce claire.
+      ctx.fillStyle = withAlpha(color, isSelf ? 0.95 : 0.7);
+      ctx.beginPath();
+      ctx.moveTo(r * 1.5, 0);
+      ctx.lineTo(r * 0.85, -r * 0.42);
+      ctx.lineTo(r * 0.85, r * 0.42);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     if (state === 'dodge') {
       ctx.globalAlpha = alpha * 0.5;

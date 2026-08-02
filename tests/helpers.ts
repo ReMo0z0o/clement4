@@ -78,6 +78,8 @@ export interface WorldSpec {
   heartIndex?: number;
   traps?: TrapSpec[];
   devices?: DeviceSpec[];
+  /** Yeux de guet, en coordonnées de TUILE comme les pièges. */
+  sensors?: { x: number; y: number }[];
   lockedDoors?: number[];
   secretDoors?: number[];
   tools?: ToolKind[];
@@ -111,6 +113,7 @@ export function makeBuild(spec: WorldSpec = {}): BuildOrder {
   }));
   raw.lockedDoors = spec.lockedDoors ?? [];
   raw.secretDoors = spec.secretDoors ?? [];
+  raw.sensors = (spec.sensors ?? []).map((g, i) => ({ id: i, x: g.x + 0.5, y: g.y + 0.5 }));
   const { build, verdict } = sanitizeBuild(p, raw);
   // Un test qui croit poser un piège et n'en pose aucun ne prouve rien.
   assert.deepEqual(

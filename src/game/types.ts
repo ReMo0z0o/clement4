@@ -419,7 +419,7 @@ export interface SnapshotOther {
   gait: Gait;
   hp: number;
   /** Pourquoi cette position est visible — utile au rendu. */
-  via: 'sight' | 'scry' | 'reveal' | 'alarm';
+  via: 'sight' | 'scry' | 'reveal' | 'alarm' | 'sensor';
 }
 
 export interface Snapshot {
@@ -447,18 +447,32 @@ export interface Snapshot {
   newTiles: { i: number; t: TileId }[];
   /** Modifications de tuiles depuis le plan de base (trous, éboulements). */
   tileEdits: { i: number; t: TileId }[];
-  /** Herses baissées, portes verrouillées, ailes éteintes. */
-  blockers: { x: number; y: number; until: number }[];
+  /**
+   * Herses baissées et portes verrouillées.
+   *
+   * `kind` voyage avec l'obstacle : une herse arrête tout le monde, un verrou
+   * ne gêne que l'Envahisseur. Sans lui, le client prédisait les deux comme des
+   * verrous et traversait les herses avant de se faire recaler par l'hôte.
+   */
+  blockers: { x: number; y: number; until: number; kind: 'portcullis' | 'lock' }[];
   doused: { x: number; y: number; r: number; until: number }[];
   alarm: boolean;
   /** Réservé au Châtelain : état de ses mécanismes. */
   devices?: { id: number; kind: DeviceKind; x: number; y: number; ready: boolean; used: boolean }[];
   /** Réservé au Châtelain : ses propres pièges. */
   ownTraps?: { id: number; kind: TrapKind; x: number; y: number; state: string }[];
-  /** Réservé au Châtelain : ses guets et leur disponibilité. */
-  sensors?: { id: number; x: number; y: number; ready: boolean }[];
-  /** Réservé au Châtelain : dernier passage détecté par un guet. */
+  /** Réservé au Châtelain : ses guets, leur réserve et celui qui veille. */
+  sensors?: { id: number; x: number; y: number; watchLeft: number; watching: boolean }[];
+  /** Réservé au Châtelain : dernier point de passage vu par un guet. */
   ping?: { x: number; y: number; age: number } | null;
+  /**
+   * Réservé à l'Envahisseur : il est dans le cercle d'un guet, et il le sait.
+   *
+   * On lui donne la position du guet qui le tient, pas celle des autres : ce
+   * qu'il apprend, il vient de le mériter en entrant dedans. C'est ce qui
+   * transforme la détection en décision — contourner, fuir, ou user la réserve.
+   */
+  spotted?: { x: number; y: number } | null;
   /** `null` tant que l'Envahisseur ne l'a pas trouvé. */
   heart: { x: number; y: number } | null;
   /**

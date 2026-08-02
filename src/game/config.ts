@@ -210,17 +210,31 @@ export const CFG = {
   },
 
   /* ------------------------------------------------------------------ */
-  /* Guets du Châtelain : trois détecteurs posés à la préparation        */
+  /* Guets du Châtelain : trois yeux posés à la préparation              */
   /* ------------------------------------------------------------------ */
+  //
+  // Un guet ne sonne plus : il REGARDE. Tant que l'Envahisseur est dans son
+  // cercle, le Châtelain le voit en direct, à travers les murs.
+  //
+  // Trois zones de vision permanentes seraient de l'omniscience gratuite, ce
+  // que la section 2 interdit. Deux garde-fous rendent l'outil jouable des deux
+  // côtés :
+  //  - une réserve de veille : un guet ne peut regarder qu'un temps total,
+  //    après quoi il s'éteint pour la manche. L'Envahisseur peut donc l'user
+  //    volontairement, et le Châtelain doit choisir quand ça vaut le coup ;
+  //  - l'Envahisseur SAIT qu'il est vu : l'œil s'allume sous ses yeux quand il
+  //    entre dans le cercle. Une information qui arrive sans qu'on puisse rien
+  //    en faire n'est pas du jeu, c'est une punition.
   sensors: {
     count: 3,
-    /** Rayon de détection, en tuiles. */
-    radius: 3.4,
-    /** Un guet déclenché se tait ce temps avant de pouvoir resonner. */
-    cooldown: 6,
-    /** Durée d'affichage de l'indicateur chez le Châtelain. */
-    pingDuration: 6,
-    label: 'Guet',
+    /** Rayon de veille, en tuiles. */
+    radius: 4,
+    /** Réserve de veille d'un guet, en secondes cumulées. */
+    watchTime: 18,
+    /** Rémanence du dernier point de passage après la sortie du cercle. */
+    pingDuration: 8,
+    label: 'Œil de guet',
+    plural: 'Yeux de guet',
   },
 
   /* ------------------------------------------------------------------ */
