@@ -19,9 +19,9 @@
 import { CFG, TICK_DT } from './config';
 import type { DeviceKind, ToolKind, TrapKind } from './config';
 import { CastleRuntime, idx } from './grid';
+import { driveMotion, expireStates } from './movement';
 import type {
   Actor,
-  ActorState,
   Brazier,
   BuildOrder,
   CastlePlan,
@@ -72,8 +72,21 @@ export class World {
   breached = false;
   contested = false;
   alarm = false;
-  scrying = false;
-  /** Fin de la période où le Châtelain voit son adversaire sans Scrutation. */
+  /**
+   * La Scrutation n'existe plus : le Châtelain ne voit plus le château entier.
+   *
+   * Deux raisons. Il a déjà ses trois yeux de guet pour repérer l'intrus, et
+   * une vue d'ensemble en plus lui donnait deux sources d'omniscience là où
+   * l'Envahisseur n'en avait aucune. Surtout, Espace maintenu le figeait sur
+   * place — 0 % de sa vitesse, mesuré — et un joueur qui appuyait par réflexe
+   * se retrouvait incapable de bouger sans comprendre pourquoi.
+   *
+   * Le champ reste, toujours faux, pour que les lecteurs existants (filtrage,
+   * rendu) n'aient pas à changer de forme. Rien ne l'écrit plus : la vue
+   * d'ensemble appartient désormais à l'Envahisseur, voir `glimpseCharges`.
+   */
+  readonly scrying = false;
+  /** Fin de la période où le Châtelain voit son adversaire (alarme, trappe). */
   revealUntil = 0;
   /** Pièce sondée et instant de fin de la révélation. */
   probedRoom = -1;
@@ -97,6 +110,11 @@ export class World {
   ping: { x: number; y: number; at: number } | null = null;
   /** Guet qui tient l'Envahisseur dans son cercle en ce moment, ou -1. */
   watchedBy = -1;
+
+  /** Coups d'œil à la carte encore disponibles pour l'Envahisseur. */
+  glimpseCharges = CFG.glimpse.charges;
+  /** Fin du coup d'œil en cours (temps de manche), 0 s'il n'y en a pas. */
+  glimpseUntil = 0;
 
   now = 0;
   timeLeft: number;
@@ -188,7 +206,7 @@ export class World {
     if (!this.contested) this.timeLeft -= dt;
 
     this.updateAlarm();
-    this.updateScry(casIn, dt);
+    this.updateGlimpse(invIn);
     this.updateActor(this.invader, invIn, dt);
     this.updateActor(this.castellan, casIn, dt);
     this.fireCrossbow(this.invader, invIn);
@@ -285,36 +303,30 @@ export class World {
   }
 
   /* ================================================================== */
-  /* Scrutation (§5)                                                    */
+  /* Coup d'œil à la carte (Envahisseur)                                */
   /* ================================================================== */
 
-  private updateScry(input: InputFrame, dt: number): void {
-    const want = input.scry && this.castellan.alive && this.influence > 0;
-    if (want && !this.scrying) {
-      if (this.influence < CFG.castellan.scryMinInfluence) return;
-      this.scrying = true;
-      this.stats.scryCount++;
-      this.events.push({ k: 'scry', on: true });
-    } else if (!want && this.scrying) {
-      this.scrying = false;
-      // La reprise en main : c'est la fenêtre où on se fait punir.
-      this.castellan.actionLockUntil = Math.max(
-        this.castellan.actionLockUntil,
-        this.now + CFG.castellan.scryRecover,
-      );
-      this.events.push({ k: 'scry', on: false });
+  /**
+   * Un appui ouvre la carte pour cinq secondes et dépense une charge. Un second
+   * appui la replie avant la fin : la charge est perdue, mais on n'est jamais
+   * prisonnier d'une vue d'ensemble quand le Châtelain surgit.
+   *
+   * Rien ici ne touche `explored` : ce que le joueur voit pendant le coup
+   * d'œil n'entre pas dans sa mémoire du plan.
+   */
+  private updateGlimpse(input: InputFrame): void {
+    if (!input.glimpse || !this.invader.alive) return;
+    if (this.glimpseActive()) {
+      this.glimpseUntil = this.now;
+      return;
     }
+    if (this.glimpseCharges <= 0) return;
+    this.glimpseCharges--;
+    this.glimpseUntil = this.now + CFG.glimpse.duration;
+  }
 
-    if (this.scrying) {
-      this.influence -= CFG.castellan.scryDrain * dt;
-      this.stats.scryTime += dt;
-      if (this.influence <= 0) {
-        this.influence = 0;
-        this.scrying = false;
-        this.castellan.actionLockUntil = this.now + CFG.castellan.scryRecover;
-        this.events.push({ k: 'scry', on: false });
-      }
-    }
+  glimpseActive(): boolean {
+    return this.now < this.glimpseUntil;
   }
 
   /* ================================================================== */
@@ -324,132 +336,44 @@ export class World {
   private updateActor(a: Actor, input: InputFrame, dt: number): void {
     if (!a.alive) return;
 
-    // Fin d'état temporisé.
-    if (a.stateUntil > 0 && this.now >= a.stateUntil) {
-      if (a.state === 'windup') {
-        this.resolveSwing(a);
-        a.state = 'recover';
-        a.stateUntil = this.now + this.weapon(a).recovery;
-      } else if (a.state === 'casting') {
-        this.finishCast(a);
-        a.state = 'idle';
-        a.stateUntil = 0;
-      } else {
-        a.state = 'idle';
-        a.stateUntil = 0;
-      }
-    }
+    // Tout ce qui décide du mouvement propre de l'acteur passe par le module
+    // partagé `movement.ts` — le même code que la prédiction de l'invité.
+    // Ne restent ici que les effets que seul l'hôte peut produire : les
+    // dégâts, les sons, les statistiques.
 
-    const isCastellan = a.role === 'castellan';
-    if (isCastellan && this.scrying) {
-      // Le corps reste immobile et sans défense, exactement là où il est.
-      a.state = 'scrying';
-      a.vel = { x: 0, y: 0 };
-      a.aim = input.aim;
-      return;
-    }
-    if (isCastellan && a.state === 'scrying') a.state = 'idle';
+    // Fin d'état temporisé. La frappe se résout depuis la position de fin
+    // d'armement, AVANT le pas de ce tick.
+    const expired = expireStates(a, this.now);
+    if (expired.swingResolved) this.resolveSwing(a);
+    if (expired.castFinished) this.finishCast(a);
 
-    if (a.role === 'invader') {
-      if (input.gait !== a.gait) this.stats.gaitSwitches++;
-      a.gait = input.gait;
-    }
+    if (a.role === 'invader' && !input.held && input.gait !== a.gait) this.stats.gaitSwitches++;
 
-    const canAct = this.now >= a.actionLockUntil && a.state !== 'dead';
-    const busy = a.state === 'windup' || a.state === 'recover' || a.state === 'casting';
+    // Le fusil du loadout (ancien outil) se déclenche au clic avec sa touche :
+    // ce clic-là ne doit pas aussi lancer un coup d'épée.
+    const toolCrossbow = a.role === 'invader' ? this.toolIndex('crossbow') : -1;
+    const flying = a.state === 'dodge' && a.role === 'invader' && a.flying;
+    const did = driveMotion(a, input, this.castle, this.now, dt, {
+      suppressSwing: toolCrossbow >= 0 && input.tool === toolCrossbow,
+      flying,
+    });
 
-    /* --- Esquive roulée --- */
-    if (
-      a.role === 'invader' &&
-      input.dodge &&
-      canAct &&
-      !busy &&
-      a.state !== 'dodge' &&
-      this.now >= a.dodgeReadyAt
-    ) {
-      const dir =
-        Math.hypot(input.move.x, input.move.y) > 0.1
-          ? norm(input.move)
-          : { x: Math.cos(a.aim), y: Math.sin(a.aim) };
-      a.state = 'dodge';
-      a.dodgeDir = dir;
-      a.stateUntil = this.now + CFG.combat.dodge.duration;
+    if (did.dodgeStarted) {
       a.invulnUntil = this.now + CFG.combat.dodge.invuln;
-      a.dodgeReadyAt = this.now + CFG.combat.dodge.cooldown;
       this.events.push({ k: 'dodge', x: a.pos.x, y: a.pos.y });
     }
-
-    /* --- Parade tenue --- */
-    if (a.role === 'invader') {
-      const gaitOk = CFG.invader.gait[a.gait].canParry;
-      if (input.parry && canAct && !busy && a.state !== 'dodge' && gaitOk) {
-        if (a.state !== 'parry') {
-          a.state = 'parry';
-          a.swungAt = this.now; // sert de repère pour la parade parfaite
-        }
-        a.stateUntil = 0;
-      } else if (a.state === 'parry') {
-        a.state = 'idle';
-      }
+    if (did.parryStarted) a.swungAt = this.now; // repère pour la parade parfaite
+    if (did.swingStarted) {
+      a.swungAt = -1;
+      this.events.push({ k: 'swing', role: a.role, x: a.pos.x, y: a.pos.y });
     }
 
-    /* --- Attaque --- */
-    if (input.primary && canAct && !busy && a.state !== 'dodge' && a.state !== 'parry') {
-      const gaitOk = a.role !== 'invader' || CFG.invader.gait[a.gait].canAttack;
-      const hasCrossbow = a.role === 'invader' && this.toolIndex('crossbow') >= 0;
-      if (gaitOk) {
-        if (hasCrossbow && input.tool === this.toolIndex('crossbow')) {
-          // géré dans updateTools
-        } else {
-          a.state = 'windup';
-          a.stateUntil = this.now + this.weapon(a).windup;
-          a.swungAt = -1;
-          a.aim = input.aim;
-          this.events.push({ k: 'swing', role: a.role, x: a.pos.x, y: a.pos.y });
-        }
-      }
-    }
-
-    if (a.state !== 'windup') a.aim = input.aim;
-
-    /* --- Déplacement --- */
-    let speed = a.role === 'invader' ? CFG.invader.baseSpeed : CFG.castellan.baseSpeed;
-    if (a.role === 'invader') speed *= CFG.invader.gait[a.gait].speedMul;
-    speed *= stateSpeedMul(a.state);
-
-    let move: Vec;
-    if (a.state === 'dodge') {
-      const k = CFG.combat.dodge.distance / CFG.combat.dodge.duration;
-      move = { x: a.dodgeDir.x * k, y: a.dodgeDir.y * k };
-    } else {
-      const want = clampVec(input.move);
-      move = { x: want.x * speed, y: want.y * speed };
-    }
-
-    // Petite inertie : assez pour que ça ne soit pas robotique, assez peu pour
-    // que le changement d'allure se sente immédiatement.
-    const rate = Math.hypot(move.x, move.y) > 0.01 ? CFG.invader.accel : CFG.invader.friction;
-    a.vel.x += (move.x - a.vel.x) * Math.min(1, rate * dt);
-    a.vel.y += (move.y - a.vel.y) * Math.min(1, rate * dt);
-
-    const flying = a.state === 'dodge' && a.role === 'invader' && a.flying;
+    // Garde-fou : `moveCircle` dégage déjà une position prise dans la pierre,
+    // mais un mur apparu APRÈS le pas (éboulement de ce tick) ne l'a pas été.
     const r = a.role === 'invader' ? CFG.invader.radius : CFG.castellan.radius;
-    const next = this.castle.moveCircle(
-      a.pos,
-      { x: a.vel.x * dt, y: a.vel.y * dt },
-      r,
-      a.role,
-      this.now,
-      flying,
-    );
-    // Si un éboulement ou une herse l'a enfermé dans un mur, on le dégage.
-    a.pos = next;
     if (this.castle.circleHits(a.pos.x, a.pos.y, r, a.role, this.now, flying)) {
-      a.pos = this.castle.nearestFree(a.pos, r, a.role, this.now);
+      a.pos = this.castle.nearestFree(a.pos, r, a.role, this.now, flying);
     }
-
-    if (a.state === 'idle' && Math.hypot(a.vel.x, a.vel.y) > 0.2) a.state = 'move';
-    else if (a.state === 'move' && Math.hypot(a.vel.x, a.vel.y) <= 0.2) a.state = 'idle';
 
     // Le grappin se termine quand l'élan s'arrête.
     if (a.flying && a.state !== 'dodge') a.flying = false;
@@ -1372,33 +1296,8 @@ function makeActor(role: Role, pos: Vec, hp: number): Actor {
     grappleTarget: null,
     castKind: null,
     crossbowReadyAt: 0,
+    attackQueuedUntil: 0,
   };
-}
-
-function stateSpeedMul(s: ActorState): number {
-  switch (s) {
-    case 'windup':
-      return 0.35;
-    case 'recover':
-      return 0.55;
-    case 'parry':
-      return CFG.combat.parry.speedMul;
-    case 'stun':
-    case 'immobile':
-    case 'scrying':
-    case 'dead':
-      return 0;
-    case 'casting':
-      return 0.2;
-    default:
-      return 1;
-  }
-}
-
-function clampVec(v: Vec): Vec {
-  const m = Math.hypot(v.x, v.y);
-  if (m <= 1) return v;
-  return { x: v.x / m, y: v.y / m };
 }
 
 function norm(v: Vec): Vec {

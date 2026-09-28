@@ -227,9 +227,12 @@ export class Renderer {
     this.time += dt;
 
     const scrying = Boolean(snap?.self.scrying);
+    // Vue d'ensemble : la caméra recule pour montrer tout le château. C'est le
+    // coup d'œil à la carte de l'Envahisseur.
+    const wide = scrying || view.glimpsing();
     const self = view.render;
 
-    this.camera.follow(self, view.aim, view.gait, scrying, dt);
+    this.camera.follow(self, view.aim, view.gait, wide, dt);
     this.updateParticles(dt);
     this.flash = Math.max(0, this.flash - dt * 4);
     this.alarmFlash = Math.max(0, this.alarmFlash - dt);
@@ -245,7 +248,7 @@ export class Renderer {
     ctx.scale(this.camera.zoom, this.camera.zoom);
     ctx.translate(-this.camera.x, -this.camera.y);
 
-    this.computeVisibility(view, role, scrying);
+    this.computeVisibility(view, role, wide);
 
     this.drawFloor(view, pal);
     this.drawScars(snap, pal);
@@ -257,8 +260,9 @@ export class Renderer {
     this.drawEntities(view, pal);
     this.drawActors(view, pal, role, scrying);
     this.drawParticles();
-    this.compositeLight(view, pal, scrying);
+    this.compositeLight(view, pal, wide);
     this.drawSpotted(snap, role);
+    if (view.glimpsing()) this.drawGlimpseFrame(view);
 
     ctx.restore();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -269,23 +273,25 @@ export class Renderer {
 
   /* ---------------- Visibilité ---------------- */
 
-  private computeVisibility(view: ClientView, role: Role, scrying: boolean): void {
+  private computeVisibility(view: ClientView, role: Role, wide: boolean): void {
     const snap = view.snap;
     const self = view.render;
     const range = role === 'invader' ? CFG.vision.invaderRange : CFG.vision.castellanRange;
     const pal = role === 'castellan' ? KEEP : SIEGE;
     const aim = view.aim;
+    // Le coup d'œil montre tout le tracé, exploré ou non : c'est son principe.
+    const glimpse = view.glimpsing();
 
     for (let y = 0; y < GRID_H; y++) {
       for (let x = 0; x < GRID_W; x++) {
         const i = idx(x, y);
-        const known = role === 'castellan' || view.known.has(i);
+        const known = role === 'castellan' || glimpse || view.known.has(i);
         if (!known) {
           this.vis[i] = 0;
           continue;
         }
-        if (scrying) {
-          // En Scrutation, la vue s'élève : le château entier est lisible.
+        if (wide) {
+          // Vue d'ensemble : le château entier est lisible.
           this.vis[i] = 1;
           continue;
         }
@@ -344,7 +350,7 @@ export class Renderer {
       for (let x = b.x0; x <= b.x1; x++) {
         const i = idx(x, y);
         if (this.vis[i] <= 0) continue;
-        const t = view.castle.tiles[i];
+        const t = view.drawnTile(i);
         if (t === T.WALL || t === T.FRAGILE || t === T.SECRET) continue;
 
         const px = x * TILE;
@@ -417,7 +423,7 @@ export class Renderer {
       for (let x = b.x0; x <= b.x1; x++) {
         const i = idx(x, y);
         if (this.vis[i] <= 0) continue;
-        const t = view.castle.tiles[i];
+        const t = view.drawnTile(i);
         if (t !== T.WALL && t !== T.FRAGILE && t !== T.SECRET) continue;
 
         const px = x * TILE;
@@ -427,7 +433,7 @@ export class Renderer {
 
         // Le dessus du mur n'est peint que là où il borde du vide : c'est ce
         // qui donne l'épaisseur sans coûter une passe d'ombre.
-        const below = view.castle.tiles[idx(x, Math.min(GRID_H - 1, y + 1))];
+        const below = view.drawnTile(idx(x, Math.min(GRID_H - 1, y + 1)));
         const openBelow = below !== T.WALL && below !== T.FRAGILE && below !== T.SECRET;
         ctx.fillStyle = pal.wallTop;
         ctx.fillRect(px, py, TILE, openBelow ? TILE * 0.72 : TILE);
@@ -709,6 +715,41 @@ export class Renderer {
       ctx.fill();
       ctx.restore();
     }
+  }
+
+  /**
+   * Le coup d'œil à la carte, rendu évident.
+   *
+   * À l'échelle du château entier, le personnage fait quelques pixels : sans
+   * repère, on passerait la moitié des cinq secondes à se chercher. L'anneau
+   * « vous êtes ici » répond à ça, et le fond de parchemin dit sans un mot
+   * qu'on regarde un plan, pas le monde.
+   */
+  private drawGlimpseFrame(view: ClientView): void {
+    const ctx = this.ctx;
+    const px = view.render.x * TILE;
+    const py = view.render.y * TILE;
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 6);
+
+    ctx.save();
+    ctx.strokeStyle = '#f2e6c8';
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.55 + pulse * 0.45;
+    ctx.beginPath();
+    ctx.arc(px, py, TILE * (0.9 + pulse * 0.35), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#f2e6c8';
+    ctx.beginPath();
+    ctx.arc(px, py, TILE * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Un liseré parchemin autour du château : c'est un plan qu'on regarde.
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#c9a24a';
+    ctx.strokeRect(-3, -3, WORLD_W + 6, WORLD_H + 6);
+    ctx.restore();
   }
 
   /**

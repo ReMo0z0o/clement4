@@ -86,6 +86,27 @@ export const CFG = {
   },
 
   /* ------------------------------------------------------------------ */
+  /* Coup d'œil à la carte — la seule vue d'ensemble du jeu              */
+  /* ------------------------------------------------------------------ */
+  //
+  // L'Envahisseur déplie un plan volé : le château entier s'affiche, murs,
+  // salles et portes. Ni le Châtelain, ni les pièges, ni le Cœur — ce qu'il
+  // voit, c'est le TRACÉ, pas ce qui l'attend dedans.
+  //
+  // La vue est temporaire : rien de ce qu'il aperçoit n'entre dans sa mémoire
+  // du plan. S'il retenait tout au premier coup d'œil, les deux suivants ne
+  // serviraient à rien, et « trois fois » ne voudrait plus rien dire.
+  //
+  // Le prix n'est pas une immobilisation — le joueur se plaignait déjà assez
+  // de ne pas pouvoir bouger — mais un aveuglement local : la caméra recule
+  // jusqu'à montrer tout le château, et à cette échelle on ne voit pas venir
+  // le Châtelain au coin du couloir.
+  glimpse: {
+    charges: 3,
+    duration: 5,
+  },
+
+  /* ------------------------------------------------------------------ */
   /* Châtelain — Scrutation et Influence (§5)                            */
   /* ------------------------------------------------------------------ */
   castellan: {

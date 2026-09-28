@@ -79,12 +79,16 @@ export function GameView({
         move: f.move,
         aim: f.aim,
         gait: f.gait,
-        primary: f.primary,
         interact: f.interact,
         scry: f.scry,
       });
+      // Les impulsions ne sont JAMAIS remises à faux ici : ce rendu tourne à
+      // 60 Hz, la simulation à 30. Un `setInput({ primary: false })` à la frame
+      // suivante effaçait le clic avant que le tick ne le lise.
+      if (f.primary) engine.pulse({ primary: true });
       if (f.secondary) engine.pulse({ secondary: true });
       if (f.dodge) engine.pulse({ dodge: true });
+      if (f.glimpse) engine.pulse({ glimpse: true });
       if (f.tool >= 0) engine.pulse({ tool: f.tool });
       if (f.device >= 0) engine.pulse({ device: f.device });
       if (f.rearm >= 0) engine.pulse({ rearm: f.rearm });
@@ -105,44 +109,11 @@ export function GameView({
     };
     raf = requestAnimationFrame(frame);
 
-    /* --- Le Châtelain déclenche ses mécanismes au clic, en Scrutation --- */
-    const onClick = (ev: PointerEvent) => {
-      if (roleRef.current !== 'castellan') return;
-      const snap = engine.view?.snap;
-      if (!snap?.self.scrying || !snap.devices) return;
-      const rect = canvas.getBoundingClientRect();
-      const world = renderer.camera.toWorld({ x: ev.clientX - rect.left, y: ev.clientY - rect.top });
-      const wx = world.x / TILE;
-      const wy = world.y / TILE;
-      let best = -1;
-      let bestD = 1.6;
-      for (const d of snap.devices) {
-        if (!d.ready) continue;
-        const dd = Math.hypot(d.x - wx, d.y - wy);
-        if (dd < bestD) {
-          bestD = dd;
-          best = d.id;
-        }
-      }
-      if (best >= 0) controls.triggerDevice(best);
-      else if (snap.ownTraps) {
-        // À défaut d'un mécanisme, on tente de réarmer le piège visé.
-        for (const t of snap.ownTraps) {
-          if (t.state !== 'spent') continue;
-          if (Math.hypot(t.x - wx, t.y - wy) < 1.2) {
-            controls.triggerRearm(t.id);
-            break;
-          }
-        }
-      }
-    };
-    canvas.addEventListener('pointerdown', onClick);
 
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
-      canvas.removeEventListener('pointerdown', onClick);
       ro.disconnect();
       offEvents();
       controls.dispose();

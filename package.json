@@ -12,7 +12,9 @@
     "test": "tsx --test tests/*.test.ts",
     "playtest": "tsx scripts/playtest.ts",
     "duel": "tsx scripts/duel.ts",
-    "check": "npm run typecheck && npm run plans && npm run duel && npm test",
+    "netbench": "tsx scripts/netbench.ts",
+    "sweep": "tsx scripts/sweep-stuck.ts",
+    "check": "npm run typecheck && npm run plans && npm run duel && npm run sweep && npm test",
     "e2e": "node scripts/e2e.mjs",
     "supabase:check": "node scripts/supabase-check.mjs"
   },

@@ -3,9 +3,12 @@
 /**
  * HUD pendant l'invasion.
  *
- * §15 est explicite : PV, allure, outils et recharges, temps restant, Influence
- * pour le Châtelain. **Rien d'autre.** Chaque élément ajouté ici doit gagner sa
- * place contre cette liste.
+ * §15 est explicite : PV, allure, outils et recharges, temps restant. **Rien
+ * d'autre.** Chaque élément ajouté ici doit gagner sa place contre cette liste.
+ *
+ * L'Influence n'y figure plus : elle n'alimentait que la Scrutation et les
+ * mécanismes, disparus tous deux. Une jauge qui ne sert à rien est une jauge
+ * qu'on surveille pour rien.
  *
  * Il se rafraîchit à ~10 Hz, pas à 60 : la boucle de jeu vit hors de React.
  */
@@ -60,7 +63,7 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
           <div className="mt-0.5 text-[11px] opacity-70">
             {invader
               ? 'Chassez-le de la salle, ou tombez.'
-              : 'Rien ne se recharge ici tant qu’il tient la salle.'}
+              : 'Personne ne se soigne ici tant qu’il tient la salle.'}
           </div>
         </div>
       )}
@@ -95,28 +98,6 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
               style={{ width: `${(snap.self.shieldHp / CFG.toolParams.buckler.absorb) * 100}%` }}
             />
           </div>
-        )}
-
-        {!invader && (
-          <>
-            <div className="mt-3 mb-1 flex items-baseline justify-between">
-              <span className="text-[11px] uppercase tracking-widest opacity-60">Influence</span>
-              <span className="font-code text-xl leading-none tabular-nums">
-                {Math.round(snap.self.influence)}
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-sm bg-black/55">
-              <div
-                className="h-full bg-keep-ember"
-                style={{ width: `${snap.self.influence}%` }}
-              />
-            </div>
-            {snap.self.scrying && (
-              <div className="mt-1.5 text-[11px] tracking-wide text-keep-ember ember-pulse">
-                Scrutation — votre corps est immobile
-              </div>
-            )}
-          </>
         )}
       </div>
 
@@ -203,31 +184,32 @@ export function Hud({ state, snap }: { state: EngineState; snap: Snapshot | null
         </div>
       )}
 
-      {/* Mécanismes du Châtelain : lisibles seulement en Scrutation. */}
-      {!invader && snap.devices && snap.devices.length > 0 && (
-        <div className="absolute bottom-5 right-5 w-56 space-y-1">
-          <div className="mb-1 text-[10px] uppercase tracking-widest opacity-45">
-            Mécanismes {snap.self.scrying ? '— cliquez pour déclencher' : '— Scrutation requise'}
-          </div>
-          {snap.devices.map((d) => {
-            const cost = CFG.devices[d.kind].influence;
-            const usable = snap.self.scrying && d.ready;
-            return (
-              <div
-                key={d.id}
-                className={`flex items-center justify-between rounded-sm border px-2 py-1 text-[11px] ${
-                  usable
-                    ? 'border-keep-ember/50 bg-black/55'
-                    : 'border-white/10 bg-black/35 opacity-40'
-                }`}
-              >
-                <span>{CFG.devices[d.kind].label}</span>
-                <span className="font-code tabular-nums opacity-70">{cost}</span>
+      {/* Le coup d'œil à la carte : combien il en reste, et combien de temps. */}
+      {invader && snap.glimpse && (() => {
+        const g = snap.glimpse;
+        const open = g.until > snap.now;
+        const left = Math.max(0, g.until - snap.now);
+        return (
+          <div className="absolute bottom-[132px] left-5 text-[11px] uppercase tracking-widest">
+            {open ? (
+              <div className="rounded-sm border border-[#c9a24a]/70 bg-black/70 px-2.5 py-1.5">
+                <div className="font-semibold text-[#e8c872]">
+                  Carte ouverte · {left.toFixed(1)} s
+                </div>
+                <div className="mt-0.5 normal-case tracking-normal opacity-70">
+                  Vous ne voyez pas ce qui vient — M pour replier
+                </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ) : (
+              <span className={g.charges > 0 ? 'text-[var(--role-accent)]' : 'opacity-35'}>
+                Carte · {'◆'.repeat(g.charges)}
+                {'◇'.repeat(Math.max(0, CFG.glimpse.charges - g.charges))}
+                {g.charges > 0 ? ' — M' : ' — épuisée'}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Les yeux de guet : ce qu'ils voient, et ce qu'il leur reste à voir. */}
       {!invader && (snap.sensors?.length ?? 0) > 0 && (

@@ -433,78 +433,103 @@ describe('alarme', () => {
 });
 
 /* ==================================================================== */
-/* Influence                                                            */
+/* Plus de Scrutation                                                   */
 /* ==================================================================== */
 
-describe('Influence du Châtelain', () => {
-  test('elle reste dans [0, max] sur une longue série de Scrutations et d’activations', () => {
-    const tiles = legalTrapTiles(COMPACT);
-    const doors = COMPACT.doors;
-    const world = makeWorld({
-      heartIndex: 1,
-      traps: [{ kind: 'spikes', x: tiles[0].x, y: tiles[0].y }],
-      devices: [
-        { kind: 'portcullis', x: Math.floor(doors[0].x), y: Math.floor(doors[0].y) },
-        { kind: 'trapdoor', x: tiles[10].x, y: tiles[10].y },
-        { kind: 'douse', x: tiles[11].x, y: tiles[11].y },
-        { kind: 'chandelier', x: tiles[12].x, y: tiles[12].y },
-        { kind: 'hound', x: tiles[13].x, y: tiles[13].y },
-      ],
-    });
-    assert.equal(world.devices.length, 5, 'le décor du test doit poser cinq mécanismes');
-
-    const r = rng(0x1f1);
-    let low = Infinity;
-    let high = -Infinity;
-    let activations = 0;
-
-    const castellanControl = () =>
-      input({
-        scry: r() < 0.6,
-        device: r() < 0.25 ? Math.floor(r() * world.devices.length) : -1,
-        rearm: r() < 0.15 ? 0 : -1,
-        move: { x: r() * 2 - 1, y: r() * 2 - 1 },
-        aim: r() * Math.PI * 2,
-      });
-    const invaderControl = () =>
-      input({ move: { x: r() * 2 - 1, y: r() * 2 - 1 }, aim: r() * Math.PI * 2 });
-
-    run(world, 5000, invaderControl, castellanControl, (w) => {
-      assert.ok(Number.isFinite(w.influence), `Influence non numérique : ${w.influence}`);
-      assert.ok(
-        w.influence >= 0 && w.influence <= CFG.castellan.influenceMax,
-        `Influence ${w.influence} hors de [0, ${CFG.castellan.influenceMax}]`,
-      );
-      low = Math.min(low, w.influence);
-      high = Math.max(high, w.influence);
-      for (const e of w.drainEvents()) if (e.k === 'device') activations++;
-      // Le molosse finirait par tuer l'Envahisseur : on le remet debout pour
-      // que la manche dure assez longtemps à observer.
-      if (w.invader.hp < 40) w.invader.hp = CFG.invader.maxHp;
-    });
-
-    assert.ok(activations >= 3, `seulement ${activations} activations : le test n’exerce rien`);
-    assert.ok(high - low > 20, `l’Influence n’a varié que de ${(high - low).toFixed(1)} points`);
-  });
-
-  test('la Scrutation demande un minimum d’Influence pour démarrer', () => {
-    const world = makeWorld({ heartIndex: 1 });
-    world.influence = CFG.castellan.scryMinInfluence - 1;
-    run(world, 1, IDLE, input({ scry: true }));
-    assert.equal(world.scrying, false, 'on ne scrute pas à sec');
-
-    world.influence = CFG.castellan.scryMinInfluence + 5;
-    run(world, 1, IDLE, input({ scry: true }));
-    assert.equal(world.scrying, true);
-  });
-
-  test('la Scrutation s’interrompt seule quand l’Influence tombe à zéro', () => {
+describe('le Châtelain n’a plus de vue d’ensemble', () => {
+  test('une entrée « scry » ne fait RIEN, même envoyée par un client trafiqué', () => {
+    // C'est l'hôte qui fait autorité : retirer la touche côté interface ne
+    // suffisait pas, un client modifié aurait pu continuer à la demander.
     const world = makeWorld({ heartIndex: 1 });
     place(world.castellan, { x: 2.5, y: 2.5 });
-    world.influence = CFG.castellan.scryMinInfluence + 2;
-    run(world, seconds(30), IDLE, input({ scry: true }));
+    world.influence = CFG.castellan.influenceMax;
+    run(world, seconds(3), IDLE, input({ scry: true }));
     assert.equal(world.scrying, false);
-    assert.ok(world.influence >= 0);
+    assert.notEqual(world.castellan.state, 'scrying');
+  });
+
+  test('Espace maintenu ne fige plus le Châtelain', () => {
+    // Mesuré avant le retrait : 0 tuile parcourue en une seconde. Le joueur
+    // qui appuyait sur Espace par réflexe de course restait planté sur place.
+    const world = makeWorld({ heartIndex: 1 });
+    const from = { x: 11.5, y: 4.5 };
+    place(world.castellan, from);
+    place(world.invader, { x: 1.5, y: 20.5 });
+    run(world, seconds(1), IDLE, input({ scry: true, move: { x: 1, y: 0 } }));
+    const moved = dist(world.castellan.pos, from);
+    assert.ok(moved > CFG.castellan.baseSpeed * 0.5, `le Châtelain n’a parcouru que ${moved.toFixed(2)} tuile`);
+  });
+
+  test('ses guets restent son seul moyen de voir à travers les murs', () => {
+    const world = makeWorld({ heartIndex: 1 });
+    place(world.castellan, { x: 1.5, y: 22.5 });
+    place(world.invader, { x: 20.5, y: 1.5 });
+    run(world, 1, IDLE, input({ scry: true }));
+    assert.equal(world.castellanSees(), null, 'le Châtelain voit l’Envahisseur sans guet ni ligne de vue');
+  });
+});
+
+/* ==================================================================== */
+/* Coup d’œil à la carte                                                */
+/* ==================================================================== */
+
+describe('coup d’œil à la carte de l’Envahisseur', () => {
+  test('trois charges, cinq secondes chacune, puis plus rien', () => {
+    const world = makeWorld({ heartIndex: 1 });
+    place(world.castellan, { x: 20.5, y: 20.5 });
+    assert.equal(world.glimpseCharges, CFG.glimpse.charges);
+
+    for (let k = 1; k <= CFG.glimpse.charges; k++) {
+      run(world, 1, input({ glimpse: true }), IDLE);
+      assert.ok(world.glimpseActive(), `le coup d’œil ${k} ne s’ouvre pas`);
+      assert.equal(world.glimpseCharges, CFG.glimpse.charges - k);
+      run(world, seconds(CFG.glimpse.duration) - 2);
+      assert.ok(world.glimpseActive(), `le coup d’œil ${k} se ferme avant ses cinq secondes`);
+      run(world, 4);
+      assert.ok(!world.glimpseActive(), `le coup d’œil ${k} dure plus de cinq secondes`);
+    }
+
+    run(world, 1, input({ glimpse: true }), IDLE);
+    assert.ok(!world.glimpseActive(), 'une quatrième charge a été accordée');
+    assert.equal(world.glimpseCharges, 0);
+  });
+
+  test('un second appui replie la carte, et la charge reste dépensée', () => {
+    const world = makeWorld({ heartIndex: 1 });
+    run(world, 1, input({ glimpse: true }), IDLE);
+    run(world, 10);
+    run(world, 1, input({ glimpse: true }), IDLE);
+    assert.ok(!world.glimpseActive(), 'la carte ne se replie pas');
+    assert.equal(world.glimpseCharges, CFG.glimpse.charges - 1, 'replier la carte a coûté ou rendu une charge');
+  });
+
+  test('il continue de marcher carte ouverte : le prix est l’aveuglement, pas l’immobilité', () => {
+    const world = makeWorld({ heartIndex: 1 });
+    const from = { x: 11.5, y: 4.5 };
+    place(world.invader, from);
+    place(world.castellan, { x: 1.5, y: 20.5 });
+    run(world, 1, input({ glimpse: true }), IDLE);
+    run(world, seconds(1), input({ move: { x: 1, y: 0 } }), IDLE);
+    assert.ok(world.glimpseActive());
+    assert.ok(dist(world.invader.pos, from) > CFG.invader.baseSpeed * 0.5);
+  });
+
+  test('ce qu’il voit carte ouverte n’entre PAS dans sa mémoire du plan', () => {
+    // Sinon, un seul coup d’œil suffirait et les deux autres charges ne
+    // serviraient à rien.
+    const world = makeWorld({ heartIndex: 1 });
+    run(world, 1);
+    const before = world.explored.size;
+    run(world, 1, input({ glimpse: true }), IDLE);
+    run(world, seconds(2));
+    assert.equal(world.explored.size, before, 'le coup d’œil a gonflé la carte explorée');
+  });
+
+  test('le Châtelain ne peut pas l’utiliser', () => {
+    const world = makeWorld({ heartIndex: 1 });
+    run(world, 1, IDLE, input({ glimpse: true }));
+    assert.ok(!world.glimpseActive());
+    assert.equal(world.glimpseCharges, CFG.glimpse.charges);
   });
 });
 

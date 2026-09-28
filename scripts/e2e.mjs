@@ -112,7 +112,11 @@ await host.waitForTimeout(6000);
 
 const invHost = await host.innerText('body');
 const invGuest = await guest.innerText('body');
-if (!/INFLUENCE/i.test(invHost)) problems.push('Le HUD du Châtelain n’affiche pas son Influence.');
+// Plus d'Influence : elle ne servait qu'à la Scrutation, retirée. Le HUD du
+// Châtelain doit montrer ses yeux de guet, et plus aucune trace de la jauge.
+if (/INFLUENCE/i.test(invHost)) problems.push('Le HUD du Châtelain affiche encore une Influence qui ne sert plus.');
+if (!/YEUX DE GUET/i.test(invHost)) problems.push('Le HUD du Châtelain n’affiche pas ses yeux de guet.');
+if (!/CARTE/i.test(invGuest)) problems.push('Le HUD de l’Envahisseur n’affiche pas ses coups d’œil à la carte.');
 if (!/PRUDENT[\s\S]*COURSE/i.test(invGuest)) problems.push('Le HUD de l’Envahisseur n’affiche pas ses allures.');
 if (!/\d:\d\d/.test(invGuest)) problems.push('Le chronomètre ne tourne pas.');
 step('invasion démarrée, les deux HUD sont en place');
@@ -138,18 +142,33 @@ const after = await guest.innerText('body');
 if (before === after) problems.push('Rien ne change quand l’Envahisseur se déplace.');
 step('l’Envahisseur se déplace et change d’allure');
 
-// Le Châtelain entre en Scrutation.
+// L'Envahisseur jette un coup d'œil à la carte : M, puis la carte se replie
+// seule au bout de cinq secondes, et il lui reste deux charges.
+await guest.bringToFront();
+await guest.locator('canvas').first().click({ position: { x: 600, y: 400 } });
+await guest.keyboard.press('KeyM');
+await guest.waitForTimeout(1200);
+const glimpsing = await guest.innerText('body');
+if (!/Carte ouverte/i.test(glimpsing)) problems.push('La carte ne s’ouvre pas sur M.');
+await shot(guest, '06-coup-d-oeil');
+await guest.waitForTimeout(4600);
+const folded = (await guest.innerText('body')).replace(/\s+/g, ' ');
+if (/Carte ouverte/i.test(folded)) problems.push('La carte reste ouverte au-delà de cinq secondes.');
+if (!/Carte · ◆◆◇/i.test(folded)) problems.push('Le coup d’œil n’a pas consommé exactement une charge.');
+step('l’Envahisseur jette un coup d’œil à la carte, qui se replie seule');
+
+// Le Châtelain n'a plus de Scrutation : Espace ne le fige plus, et rien ne
+// l'annonce plus.
 await host.bringToFront();
 await host.locator('canvas').first().click({ position: { x: 600, y: 400 } });
 await host.keyboard.down('Space');
-await host.waitForTimeout(1600);
-const scrying = await host.innerText('body');
-if (!/votre corps est immobile/i.test(scrying)) {
-  problems.push('La Scrutation ne se signale pas au Châtelain.');
-}
-await shot(host, '06-scrutation');
+await host.waitForTimeout(900);
+const castellanSpace = await host.innerText('body');
 await host.keyboard.up('Space');
-step('le Châtelain entre en Scrutation');
+if (/votre corps est immobile|Scrutation/i.test(castellanSpace)) {
+  problems.push('La Scrutation se déclenche encore chez le Châtelain.');
+}
+step('Espace ne fige plus le Châtelain');
 
 /* ---- Sur un écran court, tout doit rester atteignable ----
  * C'est le bug le plus sournois d'une mise en page : un bouton coupé par un

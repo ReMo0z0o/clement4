@@ -85,6 +85,11 @@ export class SnapshotFilter {
       toolCooldowns: isInvader ? tools.map((t) => Math.max(0, t.readyAt - world.now)) : [],
       shieldHp: isInvader && world.now < world.shieldUntil ? world.shieldHp : 0,
       crossbowCooldown: Math.max(0, me.crossbowReadyAt - world.now),
+      vx: me.vel.x,
+      vy: me.vel.y,
+      stateUntil: me.stateUntil,
+      dodgeDir: { x: me.dodgeDir.x, y: me.dodgeDir.y },
+      attackQueuedUntil: me.attackQueuedUntil,
     };
 
     /* ---- l'autre : seulement s'il est réellement perçu ---- */
@@ -161,19 +166,24 @@ export class SnapshotFilter {
       .map((b) => ({ id: b.id, x: b.pos.x, y: b.pos.y, lit: b.lit, progress: b.progress }));
 
     /* ---- tuiles, en delta ---- */
+    // L'Envahisseur reçoit les tuiles telles qu'il les VOIT, pas telles
+    // qu'elles sont : un passage secret ou un mur fragile ressemble à un mur,
+    // donc il part comme un mur. Sans ce masque, la valeur transmise trahissait
+    // chaque passage secret à quiconque ouvrait l'inspecteur réseau.
+    const show = isInvader ? seenByInvader : (t: TileId) => t;
     const newTiles: { i: number; t: TileId }[] = [];
     const entitled = this.preknown.size ? this.preknown : world.explored;
     for (const i of entitled) {
       if (this.sentTiles.has(i)) continue;
       this.sentTiles.add(i);
-      newTiles.push({ i, t: world.castle.tiles[i] });
+      newTiles.push({ i, t: show(world.castle.tiles[i]) });
     }
     if (this.preknown.size && isInvader) {
       // Le Plan volé ne donne que les murs : le reste continue de s'explorer.
       for (const i of world.explored) {
         if (this.sentTiles.has(i)) continue;
         this.sentTiles.add(i);
-        newTiles.push({ i, t: world.castle.tiles[i] });
+        newTiles.push({ i, t: show(world.castle.tiles[i]) });
       }
     }
     const tileEdits: { i: number; t: TileId }[] = [];
@@ -183,7 +193,7 @@ export class SnapshotFilter {
       const key = i * 16 + t;
       if (this.sentEdits.has(key)) continue;
       this.sentEdits.add(key);
-      tileEdits.push({ i, t });
+      tileEdits.push({ i, t: show(t) });
     }
 
     /* ---- obstacles visibles ---- */
@@ -267,6 +277,7 @@ export class SnapshotFilter {
         watchLeft: g.watchLeft,
         watching: world.watchedBy === g.id,
       }));
+      snap.openSecrets = Array.from(world.castle.openSecrets);
       snap.ping =
         world.ping && world.now - world.ping.at <= CFG.sensors.pingDuration
           ? { x: world.ping.x, y: world.ping.y, age: world.now - world.ping.at }
@@ -278,10 +289,38 @@ export class SnapshotFilter {
       // seulement de celui-là : les deux autres restent à découvrir.
       const watching = world.sensors.find((g) => g.id === world.watchedBy);
       snap.spotted = watching ? { x: watching.x, y: watching.y } : null;
+
+      // Le coup d'œil à la carte : le tracé, et seulement pendant qu'il dure.
+      //
+      // On renvoie le tracé à chaque instantané tant que le coup d'œil est
+      // ouvert, plutôt qu'une seule fois : sur Supabase, un message peut se
+      // perdre, et un coup d'œil dont l'unique envoi s'est perdu montrerait
+      // une carte vide après avoir coûté une charge. 576 petits entiers,
+      // cinq secondes durant — c'est le prix d'une charge jamais volée.
+      //
+      // Ce sont les tuiles, et rien d'autre : ni pièges, ni guets, ni Cœur,
+      // ni Châtelain. Un passage secret reste un mur, puisque c'en est un.
+      const open = world.glimpseActive();
+      snap.glimpse = {
+        charges: world.glimpseCharges,
+        until: open ? world.glimpseUntil : 0,
+        ...(open ? { tiles: world.castle.tiles.map(seenByInvader) } : {}),
+      };
     }
 
     return snap;
   }
+}
+
+/**
+ * Une tuile telle que l'Envahisseur la perçoit.
+ *
+ * Passage secret et mur fragile se comportent exactement comme un mur pour
+ * lui — ils bloquent son pas et son regard — donc les lui transmettre sous
+ * leur vrai nom ne lui apprendrait qu'une chose qu'il n'a pas gagnée.
+ */
+export function seenByInvader(t: TileId): TileId {
+  return t === T.SECRET || t === T.FRAGILE ? T.WALL : t;
 }
 
 /**
@@ -315,6 +354,7 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
     if (snap.devices) problems.push("Les mécanismes du Châtelain sont transmis à l'Envahisseur.");
     if (snap.sensors) problems.push("Les guets du Châtelain sont transmis à l'Envahisseur.");
     if (snap.ping) problems.push("L'indicateur des guets est transmis à l'Envahisseur.");
+    if (snap.openSecrets) problems.push("Les passages secrets du Châtelain sont transmis à l'Envahisseur.");
     if (snap.spotted && world.watchedBy < 0) {
       problems.push("Un guet est transmis à l'Envahisseur alors qu'il n'est dans le cercle d'aucun.");
     }
@@ -322,6 +362,18 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
       const g = world.sensors.find((s) => s.x === snap.spotted!.x && s.y === snap.spotted!.y);
       if (!g || g.id !== world.watchedBy) {
         problems.push("La position transmise n'est pas celle du guet qui a repéré l'Envahisseur.");
+      }
+    }
+    if (snap.glimpse?.tiles && !world.glimpseActive()) {
+      problems.push('Le tracé du château est transmis hors de tout coup d’œil à la carte.');
+    }
+    if (snap.glimpse?.tiles) {
+      // Un passage secret doit rester indiscernable d'un mur, y compris ici.
+      for (let i = 0; i < snap.glimpse.tiles.length; i++) {
+        if (snap.glimpse.tiles[i] === T.SECRET) {
+          problems.push('Un passage secret est désigné comme tel dans le coup d’œil à la carte.');
+          break;
+        }
       }
     }
     if (snap.ownTraps) problems.push("Les pièges du Châtelain sont transmis à l'Envahisseur.");
@@ -337,6 +389,9 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
     for (const t of snap.newTiles) {
       if (!world.explored.has(t.i) && !world.loadout.tools.includes('stolenmap')) {
         problems.push(`La tuile ${t.i} est transmise avant d'avoir été explorée.`);
+      }
+      if (t.t === T.SECRET || t.t === T.FRAGILE) {
+        problems.push(`La tuile ${t.i} trahit sa vraie nature (${t.t}) au lieu de passer pour un mur.`);
       }
     }
     void 0;
@@ -355,6 +410,7 @@ export function auditSnapshot(snap: Snapshot, role: Role, world: World): string[
     }
     if (snap.tells.length) problems.push('Des indices sont transmis au Châtelain via `tells`.');
     if (snap.spotted) problems.push("L'avertissement de repérage est transmis au Châtelain.");
+    if (snap.glimpse) problems.push('Le coup d’œil à la carte de l’Envahisseur est transmis au Châtelain.');
   }
 
   return problems;

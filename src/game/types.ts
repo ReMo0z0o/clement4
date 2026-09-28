@@ -211,6 +211,8 @@ export interface Actor {
   castKind: 'elixir' | null;
   /** Prochaine seconde à laquelle l'arbalète peut tirer. */
   crossbowReadyAt: number;
+  /** Clic d'épée mémorisé jusqu'à cet instant, s'il est tombé trop tôt. */
+  attackQueuedUntil: number;
 }
 
 export interface TrapRuntime extends TrapPlacement {
@@ -327,6 +329,13 @@ export interface InputFrame {
   dodge: boolean;
   interact: boolean;
   scry: boolean;
+  /** Coup d'œil à la carte (Envahisseur). Impulsion : ne vaut que pour un tick. */
+  glimpse: boolean;
+  /**
+   * Trame inventée par l'hôte faute d'avoir reçu la vraie à temps. Elle ne
+   * déplace personne et ne déclenche rien : voir `driveMotion`.
+   */
+  held: boolean;
   /** Index d'outil déclenché ce tick, ou −1. */
   tool: number;
   /** Mécanisme déclenché en Scrutation ce tick, ou −1. */
@@ -348,6 +357,8 @@ export function emptyInput(seq = 0): InputFrame {
     dodge: false,
     interact: false,
     scry: false,
+    glimpse: false,
+    held: false,
     tool: -1,
     device: -1,
     rearm: -1,
@@ -409,6 +420,18 @@ export interface SnapshotSelf {
   shieldHp: number;
   /** Temps restant avant le prochain tir d'arbalète. */
   crossbowCooldown: number;
+  /**
+   * De quoi rejouer ses propres mouvements exactement comme l'hôte : la
+   * vitesse (l'inertie), la fin datée de l'état en cours, la direction d'une
+   * esquive, un clic mémorisé. Sans eux, l'invité prédisait une marche sans
+   * élan, ignorait ses roulades et restait figé plus longtemps que son
+   * étourdissement réel — trois sources de recalage à chaque seconde de jeu.
+   */
+  vx: number;
+  vy: number;
+  stateUntil: number;
+  dodgeDir: Vec;
+  attackQueuedUntil: number;
 }
 
 export interface SnapshotOther {
@@ -466,6 +489,12 @@ export interface Snapshot {
   /** Réservé au Châtelain : dernier point de passage vu par un guet. */
   ping?: { x: number; y: number; age: number } | null;
   /**
+   * Réservé au Châtelain : ses passages secrets ouverts (index dans
+   * `plan.secretSpots`). Sans eux, sa prédiction prenait ses propres passages
+   * pour des murs et l'en éjectait pendant que l'hôte le laissait passer.
+   */
+  openSecrets?: number[];
+  /**
    * Réservé à l'Envahisseur : il est dans le cercle d'un guet, et il le sait.
    *
    * On lui donne la position du guet qui le tient, pas celle des autres : ce
@@ -473,6 +502,15 @@ export interface Snapshot {
    * transforme la détection en décision — contourner, fuir, ou user la réserve.
    */
   spotted?: { x: number; y: number } | null;
+  /**
+   * Réservé à l'Envahisseur : son coup d'œil à la carte.
+   *
+   * `tiles` n'est présent que dans l'instantané qui OUVRE le coup d'œil : le
+   * tracé ne change pas pendant cinq secondes, inutile de le renvoyer vingt
+   * fois par seconde. Le client le garde à part, jamais dans sa mémoire du
+   * plan, et l'oublie à `until`.
+   */
+  glimpse?: { charges: number; until: number; tiles?: TileId[] };
   /** `null` tant que l'Envahisseur ne l'a pas trouvé. */
   heart: { x: number; y: number } | null;
   /**

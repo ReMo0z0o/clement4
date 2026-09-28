@@ -11,6 +11,7 @@
 
 import { CFG, TICK_DT } from '@/game/config';
 import { CastleRuntime, idx } from '@/game/grid';
+import { driveMotion, expireStates, type Motion } from '@/game/movement';
 import type {
   CastlePlan,
   Gait,
@@ -43,6 +44,9 @@ interface TellView {
   seen: boolean;
 }
 
+/** Trames en attente conservées au plus : cinq secondes à 30 Hz. */
+const PENDING_MAX = 150;
+
 export class ClientView {
   readonly role: Role;
   /** Ce qui est *affiché* : tout est mur tant que rien n'a été révélé. */
@@ -66,14 +70,41 @@ export class ClientView {
   private readonly predictCastle: CastleRuntime;
   known = new Set<number>();
 
+  /**
+   * Le tracé montré par un coup d'œil à la carte, tenu À PART de `known`.
+   *
+   * C'est ce qui rend le coup d'œil temporaire : ces tuiles s'affichent
+   * pendant cinq secondes puis disparaissent, sans laisser de trace dans la
+   * mémoire du plan. Les verser dans `known` aurait tout révélé pour de bon au
+   * premier usage, et les deux autres charges n'auraient servi à rien.
+   */
+  private glimpseTiles: TileId[] | null = null;
+  glimpseUntil = 0;
+  glimpseCharges = CFG.glimpse.charges;
+
   snap: Snapshot | null = null;
   private prevSnap: Snapshot | null = null;
   private snapAt = 0;
   private prevSnapAt = 0;
 
-  /** Position prédite localement : c'est elle qui répond à la touche. */
+  /**
+   * Son propre état de mouvement, prédit localement : c'est lui qui répond à
+   * la touche. Il est avancé par `movement.ts`, le MÊME code que l'hôte.
+   */
+  private motion: Motion;
+  /** Position prédite (raccourci vers `motion.pos`). */
   pos: Vec;
-  /** Position affichée : la prédite, lissée pour éviter les à-coups. */
+  /** Position au pas précédent : l'affichage glisse de l'une à l'autre. */
+  private prevPos: Vec;
+  /**
+   * Écart visuel laissé par la dernière correction de l'hôte, résorbé en
+   * quelques dizaines de millisecondes. On lisse la CORRECTION, jamais le
+   * déplacement lui-même.
+   */
+  private corr: Vec = { x: 0, y: 0 };
+  /** Vrai dès qu'on prédit (l'invité). L'hôte, lui, n'a rien à prédire. */
+  private predicting = false;
+  /** Position affichée. */
   render: Vec;
   aim = 0;
   gait: Gait = 'normal';
@@ -95,7 +126,21 @@ export class ClientView {
     this.castle = new CastleRuntime(blank);
     const open: CastlePlan = { ...plan, tiles: new Array(plan.tiles.length).fill(T.FLOOR) };
     this.predictCastle = new CastleRuntime(open);
-    this.pos = { ...spawn };
+    this.motion = {
+      role,
+      pos: { ...spawn },
+      vel: { x: 0, y: 0 },
+      aim: 0,
+      gait: 'normal',
+      state: 'idle',
+      stateUntil: 0,
+      dodgeDir: { x: 1, y: 0 },
+      dodgeReadyAt: 0,
+      actionLockUntil: 0,
+      attackQueuedUntil: 0,
+    };
+    this.pos = this.motion.pos;
+    this.prevPos = { ...spawn };
     this.render = { ...spawn };
   }
 
@@ -120,6 +165,18 @@ export class ClientView {
       this.known.add(t.i);
     }
     if (snap.newTiles.length || snap.tileEdits.length) this.castle.markLightDirty();
+    if (snap.openSecrets) {
+      this.castle.openSecrets = new Set(snap.openSecrets);
+      this.predictCastle.openSecrets = new Set(snap.openSecrets);
+    }
+
+    const g = snap.glimpse;
+    if (g) {
+      this.glimpseCharges = g.charges;
+      this.glimpseUntil = g.until;
+      if (g.tiles) this.glimpseTiles = g.tiles;
+      else if (g.until <= snap.now) this.glimpseTiles = null;
+    }
 
     this.castle.blockers.clear();
     this.predictCastle.blockers.clear();
@@ -143,24 +200,38 @@ export class ClientView {
     /* --- Réconciliation de sa propre position --- */
     this.pending = this.pending.filter((f) => f.seq > snap.ackSeq);
 
-    // Chez l'hôte, personne n'empile d'entrée en attente : sa vue est
-    // reconstruite directement depuis la simulation. Sans cette ligne, `aim`
-    // n'était jamais écrit et son propre personnage restait tourné vers l'est
-    // pendant toute la manche, quoi que fasse la souris — on tirait dans une
-    // direction et on regardait dans une autre.
-    if (!this.pending.length) this.aim = snap.self.aim;
-    const authoritative = { x: snap.self.x, y: snap.self.y };
-    let replayed = { ...authoritative };
-    for (const f of this.pending) {
-      replayed = this.applyMove(replayed, f, TICK_DT, snap.self.state);
-    }
-    const err = Math.hypot(replayed.x - this.pos.x, replayed.y - this.pos.y);
-    if (err > CFG.net.hardSnapDistance) {
-      // Un écart de cette taille n'est pas du retard : c'est une correction.
-      this.pos = replayed;
-      this.render = { ...replayed };
+    if (!this.predicting) {
+      // L'hôte : sa vue EST la simulation, reconstruite à chaque tick. Pas de
+      // correction à fondre, seulement le pas de ce tick à interpoler.
+      this.prevPos = { ...this.motion.pos };
+      this.motion = this.seed(snap);
+      this.pos = this.motion.pos;
+      // Sans cette ligne, `aim` n'était jamais écrit chez l'hôte : son propre
+      // personnage restait tourné vers l'est toute la manche.
+      this.aim = snap.self.aim;
+      this.gait = snap.self.gait;
     } else {
-      this.pos = replayed;
+      // L'invité : on repart de l'état que l'hôte confirme, puis on rejoue
+      // chaque trame qu'il n'a pas encore jouée, au même instant que lui.
+      const before = { ...this.motion.pos };
+      const m = this.seed(snap);
+      this.pending.forEach((f, k) => this.advance(m, f, snap.now + (k + 1) * TICK_DT));
+      this.motion = m;
+      this.pos = m.pos;
+      const dx = m.pos.x - before.x;
+      const dy = m.pos.y - before.y;
+      if (Math.hypot(dx, dy) > CFG.net.hardSnapDistance) {
+        // Un écart de cette taille n'est pas du retard : on recale net.
+        this.prevPos = { ...m.pos };
+        this.corr = { x: 0, y: 0 };
+      } else {
+        // L'affichage ne bouge pas d'un pixel à l'instant de la correction ;
+        // l'écart est ensuite résorbé dans `interpolate`.
+        this.prevPos.x += dx;
+        this.prevPos.y += dy;
+        this.corr.x -= dx;
+        this.corr.y -= dy;
+      }
     }
 
     /* --- L'adversaire --- */
@@ -211,12 +282,17 @@ export class ClientView {
 
   /** Enregistre l'entrée envoyée, pour pouvoir la rejouer à la réconciliation. */
   pushInput(frame: InputFrame): void {
+    this.predicting = true;
     this.lastSeq = frame.seq;
     this.pending.push(frame);
-    if (this.pending.length > 90) this.pending.shift();
+    // Cinq secondes sans instantané : la liaison est morte, la pause viendra.
+    // On borne pour ne pas rejouer une file sans fin à chaque réception.
+    if (this.pending.length > PENDING_MAX) this.pending.shift();
     this.gait = frame.gait;
-    this.aim = frame.aim;
-    this.pos = this.applyMove(this.pos, frame, TICK_DT, this.snap?.self.state ?? 'idle');
+    this.prevPos = { ...this.motion.pos };
+    this.advance(this.motion, frame, (this.snap?.now ?? 0) + this.pending.length * TICK_DT);
+    this.pos = this.motion.pos;
+    this.aim = this.motion.aim;
   }
 
   nextSeq(): number {
@@ -224,40 +300,64 @@ export class ClientView {
   }
 
   /**
-   * Déplacement prédit. Volontairement plus simple que la simulation : on
-   * prédit ce qui est certain (la marche), jamais ce qui dépend de l'autre
-   * joueur (les dégâts, les projections). L'hôte tranche le reste.
+   * Un tick de SES PROPRES mouvements, par le code de l'hôte.
+   *
+   * On prédit tout ce qui ne dépend que de soi : la marche et son élan,
+   * l'esquive, le départ d'une frappe et le ralentissement qu'elle impose, la
+   * fin datée d'un étourdissement. Jamais ce qui dépend de l'adversaire — un
+   * coup reçu, un recul : l'hôte le tranche et la correction s'en charge.
    */
-  private applyMove(from: Vec, f: InputFrame, dt: number, state: string): Vec {
-    if (state === 'stun' || state === 'immobile' || state === 'dead' || state === 'scrying') {
-      return from;
-    }
-    let speed = this.role === 'invader' ? CFG.invader.baseSpeed : CFG.castellan.baseSpeed;
-    if (this.role === 'invader') speed *= CFG.invader.gait[f.gait].speedMul;
-    if (state === 'parry') speed = 0;
-    else if (state === 'windup') speed *= 0.35;
-    else if (state === 'recover') speed *= 0.55;
-    else if (state === 'casting') speed *= 0.2;
+  private advance(m: Motion, f: InputFrame, now: number): void {
+    expireStates(m, now);
+    driveMotion(m, f, this.predictCastle, now, TICK_DT);
+  }
 
-    const m = Math.hypot(f.move.x, f.move.y);
-    const mv = m > 1 ? { x: f.move.x / m, y: f.move.y / m } : f.move;
-    const delta = { x: mv.x * speed * dt, y: mv.y * speed * dt };
-    const r = this.role === 'invader' ? CFG.invader.radius : CFG.castellan.radius;
-    return this.predictCastle.moveCircle(from, delta, r, this.role, this.snap?.now ?? 0);
+  /** L'état de mouvement que l'hôte confirme dans cet instantané. */
+  private seed(snap: Snapshot): Motion {
+    const s = snap.self;
+    return {
+      role: this.role,
+      pos: { x: s.x, y: s.y },
+      vel: { x: s.vx, y: s.vy },
+      aim: s.aim,
+      gait: s.gait,
+      state: s.state,
+      stateUntil: s.stateUntil,
+      dodgeDir: { x: s.dodgeDir.x, y: s.dodgeDir.y },
+      dodgeReadyAt: s.dodgeReadyAt,
+      actionLockUntil: s.actionLockUntil,
+      attackQueuedUntil: s.attackQueuedUntil,
+    };
   }
 
   /* ================================================================== */
   /* Interpolation d'affichage                                          */
   /* ================================================================== */
 
-  /** Appelé à chaque frame de rendu, pas à chaque tick. */
-  interpolate(dtMs: number, nowMs: number): void {
+  /**
+   * Appelé à chaque frame de rendu, pas à chaque tick.
+   *
+   * `alpha` est la fraction du tick en cours déjà écoulée (0 → 1).
+   */
+  interpolate(dtMs: number, nowMs: number, alpha = 1): void {
     const dt = dtMs / 1000;
 
-    // Sa propre position : lissage court, sinon la correction se voit.
-    const k = Math.min(1, CFG.net.reconcileLerp * dt);
-    this.render.x = lerp(this.render.x, this.pos.x, k);
-    this.render.y = lerp(this.render.y, this.pos.y, k);
+    // Sa propre position.
+    //
+    // Elle poursuivait `pos` par un filtre exponentiel : en régime établi,
+    // l'affichage traînait de v/14 derrière le joueur — 0,24 tuile en marche,
+    // 70 ms de retard pur, hôte compris. Et la caméra, et même la visée,
+    // suivaient cette position en retard : c'est tout l'écran qui semblait
+    // répondre mollement.
+    //
+    // On interpole désormais entre les deux derniers pas simulés, ce qui
+    // plafonne le retard à un tick, et l'on ne lisse plus que la correction.
+    const a = Math.min(1, Math.max(0, alpha));
+    const decay = Math.exp(-CFG.net.reconcileLerp * dt);
+    this.corr.x *= decay;
+    this.corr.y *= decay;
+    this.render.x = lerp(this.prevPos.x, this.pos.x, a) + this.corr.x;
+    this.render.y = lerp(this.prevPos.y, this.pos.y, a) + this.corr.y;
 
     // L'adversaire : rendu avec un retard fixe, ce qui absorbe la gigue.
     if (this.other && this.otherRender) {
@@ -303,6 +403,20 @@ export class ClientView {
 
   isKnown(x: number, y: number): boolean {
     return this.known.has(idx(x, y));
+  }
+
+  /** Un coup d'œil à la carte est-il ouvert en ce moment ? */
+  glimpsing(): boolean {
+    return this.glimpseTiles !== null && (this.snap?.now ?? 0) < this.glimpseUntil;
+  }
+
+  /**
+   * La tuile à DESSINER en `i`. Pendant un coup d'œil, c'est le tracé montré ;
+   * le reste du temps, ce qu'on a réellement exploré. Le déplacement, lui, ne
+   * lit jamais ceci : il s'appuie toujours sur la carte de prédiction.
+   */
+  drawnTile(i: number): TileId {
+    return this.glimpsing() ? this.glimpseTiles![i] : this.castle.tiles[i];
   }
 
   tileAt(x: number, y: number): TileId {

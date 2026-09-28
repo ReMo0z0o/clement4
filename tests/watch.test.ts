@@ -269,3 +269,45 @@ describe('prédiction de déplacement côté client', () => {
     assert.equal(view.aim, 2.1, 'l’hôte regardait toujours vers l’est, quoi que fasse sa souris');
   });
 });
+
+/* ==================================================================== */
+/* Passages secrets du Châtelain invité                                 */
+/* ==================================================================== */
+
+describe('passages secrets côté client', () => {
+  test('le Châtelain invité traverse son propre passage secret sans être éjecté', () => {
+    // Sa prédiction ne recevait jamais la liste des passages ouverts : elle les
+    // tenait pour des murs, et l'en expulsait pendant que l'hôte, lui, le
+    // laissait passer. Quatre vérificateurs indépendants l'ont confirmé.
+    const plan = getPlan('compact');
+    const world = makeWorld({ planId: 'compact', secretDoors: [0] });
+    assert.ok(world.castle.openSecrets.has(0), 'le décor doit ouvrir le passage 0');
+    const spot = plan.secretSpots[0];
+    const filter = new SnapshotFilter('castellan', world, {});
+    run(world, 1);
+
+    const view = new ClientView(plan, 'castellan', plan.castellanSpawn);
+    view.applySnapshot(snapshotOf(filter, world), 0);
+
+    // On se place dans le passage même, là où l'hôte autorise à se tenir.
+    view.pos.x = spot.x;
+    view.pos.y = spot.y;
+    const at = { x: view.pos.x, y: view.pos.y };
+    const f = emptyInput(1);
+    f.move = { x: 0, y: 0 };
+    view.pushInput(f);
+    assert.ok(
+      Math.hypot(view.pos.x - at.x, view.pos.y - at.y) < 1e-6,
+      `le Châtelain est éjecté de son propre passage (${at.x},${at.y}) → (${view.pos.x.toFixed(2)},${view.pos.y.toFixed(2)})`,
+    );
+  });
+
+  test('l’Envahisseur ne reçoit jamais la liste des passages ouverts', () => {
+    const world = makeWorld({ planId: 'compact', secretDoors: [0] });
+    const filter = new SnapshotFilter('invader', world, {});
+    run(world, 1);
+    const snap = snapshotOf(filter, world);
+    assert.equal(snap.openSecrets, undefined);
+    assert.deepEqual(auditSnapshot(snap, 'invader', world), []);
+  });
+});

@@ -107,8 +107,10 @@ export function PrepScreen({
           </div>
           {castellan ? (
             <p className="mt-2 text-[12px] leading-snug opacity-55">
-              Un guet vous signale tout passage ennemi à {CFG.sensors.radius} pas, où que vous
-              soyez. Placez aussi votre Cœur : c’est lui qu’il vient prendre.
+              Dans le cercle d’un œil ({CFG.sensors.radius} pas), vous voyez l’intrus en direct,
+              même derrière un mur — tant que sa réserve de {CFG.sensors.watchTime} s dure. Ce sont
+              vos seuls yeux à distance : vous ne voyez plus le château d’en haut. Placez aussi
+              votre Cœur : c’est lui qu’il vient prendre.
             </p>
           ) : (
             <p className="mt-2 text-[12px] leading-snug opacity-55">
@@ -200,7 +202,7 @@ function CastellanPalette({
 
       <Group
         title="Le Cœur"
-        hint="C’est lui que l’Envahisseur vient capturer — et votre recharge d’Influence."
+        hint="C’est lui que l’Envahisseur vient capturer — et le seul endroit où vous vous soignez."
       >
         <PaletteButton
           active={brush.kind === 'heart'}
@@ -225,8 +227,9 @@ function InvaderBriefing({ state }: { state: EngineState }) {
       <h3 className="font-display text-xl">Ce que vous savez</h3>
       <ul className="space-y-2 text-sm leading-relaxed opacity-80">
         <li>
-          Trouvez le Cœur et tenez-vous-y {CFG.heart.captureTime} secondes. Le Châtelain doit y
-          revenir pour recharger : vous finirez par vous croiser.
+          Trouvez le Cœur et tenez-vous-y {CFG.heart.captureTime} secondes. Le Châtelain y revient
+          pour se soigner : vous finirez par vous croiser. S’il vous y rejoint, le temps s’arrête
+          jusqu’à ce que l’un de vous parte ou tombe.
         </li>
         <li>
           Vous portez la même épée et la même arbalète que lui. Le carreau rebondit jusqu’à{' '}
@@ -238,6 +241,12 @@ function InvaderBriefing({ state }: { state: EngineState }) {
           cercle, le Châtelain vous voit en direct — même derrière un mur. Vous le saurez : l’œil
           s’affiche en rouge. Chacun n’a que {CFG.sensors.watchTime} secondes de veille en réserve,
           alors user un cercle exprès avant le vrai passage est une option.
+        </li>
+        <li>
+          Vous avez {CFG.glimpse.charges} coups d’œil à la carte (touche M), de{' '}
+          {CFG.glimpse.duration} secondes chacun : tout le tracé du château s’affiche. Rien de ce
+          que vous y voyez ne reste en mémoire — et pendant ce temps, vous ne voyez pas venir le
+          Châtelain.
         </li>
         <li>
           Trois braseros donnent {CFG.brazier.timeBonus} secondes chacun, deux au maximum. Ils
@@ -261,6 +270,7 @@ function InvaderChecklist() {
     ['Maj (maintenu)', 'Avancer prudemment'],
     ['Espace (maintenu)', 'Courir'],
     ['F', 'Esquive roulée'],
+    ['M', `Coup d’œil à la carte (${CFG.glimpse.charges} × ${CFG.glimpse.duration} s)`],
     ['E', 'Allumer un brasero'],
   ] as const;
   return (

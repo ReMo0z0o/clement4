@@ -100,6 +100,23 @@ export interface EngineState {
 export type EngineListener = (s: EngineState) => void;
 export type EventListener = (events: GameEvent[]) => void;
 
+/**
+ * Trames de l'invité tenues en réserve, au plus. Au-delà (≈ 130 ms), l'hôte
+ * est en retard et l'on écarte les plus anciennes.
+ */
+const REMOTE_QUEUE_MAX = 4;
+
+/** Reporte sur `into` les impulsions de `from` : aucune ne doit se perdre. */
+function mergePulses(into: InputFrame, from: InputFrame): void {
+  into.primary ||= from.primary;
+  into.secondary ||= from.secondary;
+  into.dodge ||= from.dodge;
+  into.glimpse ||= from.glimpse;
+  if (into.tool < 0) into.tool = from.tool;
+  if (into.device < 0) into.device = from.device;
+  if (into.rearm < 0) into.rearm = from.rearm;
+}
+
 export class Engine {
   readonly transport: Transport;
   readonly isHost: boolean;
@@ -118,6 +135,16 @@ export class Engine {
 
   private raf = 0;
   private lastFrame = 0;
+  /** Arrête le battement de secours (voir `startHeartbeat`). */
+  private stopHeartbeat: (() => void) | null = null;
+  /**
+   * Le message d'ouverture de la manche (plan, rôle, renseignement), gardé pour
+   * être renvoyé tant que l'invité n'a pas prouvé qu'il l'a reçu.
+   */
+  private intro: Extract<NetMessage, { type: 'phase' }> | null = null;
+  private introAcc = 0;
+  /** Manche pour laquelle la vue a été ouverte : un renvoi ne la recrée pas. */
+  private viewRound = 0;
   private acc = 0;
   private tick = 0;
   private snapAcc = 0;
@@ -126,7 +153,24 @@ export class Engine {
   private uiAcc = 0;
 
   private localInput: InputFrame = emptyInput();
-  private remoteInput: InputFrame = emptyInput();
+  /**
+   * Les trames de l'invité, dans l'ordre, en attente d'être jouées.
+   *
+   * C'était un simple niveau, écrasé à chaque réception et relu à chaque
+   * tick. Deux trames arrivées entre deux ticks — ce que la gigue d'Internet
+   * provoque en permanence — et le pas de la première disparaissait, tout en
+   * étant acquitté : l'invité, qui l'avait prédit, se voyait tiré en arrière.
+   * Aucune trame reçue, et la même était rejouée deux fois : poussé en avant.
+   * D'où un tremblement continu de sa position, jamais tout à fait nul.
+   *
+   * Désormais chaque trame est jouée exactement une fois, et l'acquittement ne
+   * couvre que ce qui l'a réellement été.
+   */
+  private remoteQueue: InputFrame[] = [];
+  /** Dernière trame jouée : sert de modèle à une trame « retenue ». */
+  private remoteLast: InputFrame = emptyInput();
+  private lastQueuedSeq = 0;
+  /** Numéro de la dernière trame de l'invité réellement SIMULÉE. */
   private lastAckSeq = 0;
   private seq = 0;
   private peerBuild: BuildOrder | null = null;
@@ -233,14 +277,57 @@ export class Engine {
 
   start(): void {
     this.lastFrame = performance.now();
-    const frame = (now: number) => {
+    const frame = () => {
       this.raf = requestAnimationFrame(frame);
-      // Onglet en arrière-plan : rAF s'arrête, on ne rattrape pas l'infini (§18).
-      const dtMs = Math.min(250, now - this.lastFrame);
-      this.lastFrame = now;
-      this.update(dtMs / 1000, now);
+      this.beat();
     };
     this.raf = requestAnimationFrame(frame);
+    this.startHeartbeat();
+  }
+
+  /** Un pas de boucle, quelle qu'en soit la source : l'écran ou le secours. */
+  private beat(): void {
+    // Une seule horloge : l'horodatage de rAF peut précéder `performance.now()`
+    // lu par le secours, et donner un pas négatif.
+    const now = performance.now();
+    // Au-delà d'un quart de seconde, on ne rattrape pas l'infini (§18).
+    const dtMs = Math.max(0, Math.min(250, now - this.lastFrame));
+    this.lastFrame = now;
+    this.update(dtMs / 1000, now);
+  }
+
+  /**
+   * Un battement de secours qui ne s'endort pas.
+   *
+   * La simulation n'existe que chez l'hôte, et elle suivait `requestAnimation
+   * Frame` — que le navigateur bride à environ une image par seconde dès que
+   * la fenêtre passe derrière une autre. Mesuré : la manche entière tombait au
+   * ralenti POUR LES DEUX JOUEURS dès que l'hôte changeait de fenêtre, et
+   * l'invité, faute d'entrées envoyées, se figeait de la même façon.
+   *
+   * Un worker n'est pas soumis à ce bridage. Il ne fait qu'une chose : réveiller
+   * la boucle quand l'écran a cessé de le faire. Tant que rAF tourne, il se tait.
+   */
+  private startHeartbeat(): void {
+    const wake = () => {
+      if (performance.now() - this.lastFrame < 50) return;
+      this.beat();
+    };
+    try {
+      const src = `setInterval(function () { postMessage(0); }, ${Math.round(1000 / 30)});`;
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      const worker = new Worker(url);
+      worker.onmessage = wake;
+      this.stopHeartbeat = () => {
+        worker.terminate();
+        URL.revokeObjectURL(url);
+      };
+    } catch {
+      // Pas de worker : un minuteur ordinaire, bridé lui aussi, mais toujours
+      // moins que rAF, qui s'arrête tout à fait.
+      const id = setInterval(wake, 1000 / 30);
+      this.stopHeartbeat = () => clearInterval(id);
+    }
   }
 
   /**
@@ -252,6 +339,8 @@ export class Engine {
    */
   stop(): void {
     cancelAnimationFrame(this.raf);
+    this.stopHeartbeat?.();
+    this.stopHeartbeat = null;
     for (const u of this.unsubscribe) u();
     this.unsubscribe = [];
     this.listeners.clear();
@@ -285,7 +374,10 @@ export class Engine {
     if (this.isHost) this.hostUpdate(dt, nowMs);
     else this.guestUpdate(dt, nowMs);
 
-    this.view?.interpolate(dt * 1000, nowMs);
+    // La fraction du tick courant déjà écoulée : l'affichage glisse entre les
+    // deux derniers pas simulés au lieu de courir après le dernier.
+    const alpha = this.isHost ? this.acc / TICK_DT : this.inputAcc * CFG.net.inputHz;
+    this.view?.interpolate(dt * 1000, nowMs, alpha);
 
     // Le HUD se rafraîchit dix fois par seconde, pas soixante.
     this.uiAcc += dt;
@@ -313,6 +405,7 @@ export class Engine {
         break;
       }
       case 'countdown': {
+        this.resendIntro(dt, nowMs);
         if (nowMs >= this.phaseEndsAt) {
           this.state.phase = 'invasion';
           this.broadcastPhase();
@@ -323,6 +416,7 @@ export class Engine {
       case 'invasion': {
         const w = this.world;
         if (!w) break;
+        this.resendIntro(dt, nowMs);
         this.acc += dt;
         let steps = 0;
         while (this.acc >= TICK_DT && steps < MAX_CATCHUP_TICKS) {
@@ -330,12 +424,12 @@ export class Engine {
           steps++;
           this.tick++;
           const hostRole = roleOf('host', this.state.round, this.match);
-          const invIn = hostRole === 'invader' ? this.localInput : this.remoteInput;
-          const casIn = hostRole === 'castellan' ? this.localInput : this.remoteInput;
+          const remote = this.nextRemote();
+          const invIn = hostRole === 'invader' ? this.localInput : remote;
+          const casIn = hostRole === 'castellan' ? this.localInput : remote;
           w.step(invIn, casIn);
           // Une impulsion ne vaut que pour le tick qui l'a consommée.
           this.clearPulses(this.localInput);
-          this.clearPulses(this.remoteInput);
           // L'hôte reconstruit sa propre vue à chaque tick : son déplacement
           // doit répondre immédiatement, pas avec le retard du réseau.
           this.applyOwnSnapshot(w, nowMs);
@@ -396,13 +490,36 @@ export class Engine {
     this.transport.send({ type: 'snapshot', snap: theirs });
   }
 
+  /**
+   * La trame de l'invité pour ce tick : exactement une, dans l'ordre reçu.
+   *
+   * Si rien n'est arrivé à temps, on joue une trame RETENUE : mêmes touches
+   * tenues, aucune impulsion, et surtout aucun déplacement (voir
+   * `driveMotion`). La position de l'invité reste ainsi une fonction exacte
+   * des trames reçues — celles qu'il a lui-même prédites — et le retard
+   * d'un paquet ne se paie plus d'un recalage.
+   */
+  private nextRemote(): InputFrame {
+    const f = this.remoteQueue.shift();
+    if (f) {
+      this.remoteLast = f;
+      this.lastAckSeq = f.seq;
+      return f;
+    }
+    const held: InputFrame = { ...this.remoteLast, held: true };
+    this.clearPulses(held);
+    return held;
+  }
+
   /** Efface les actions ponctuelles : elles ne durent qu'un tick. */
   private clearPulses(f: InputFrame): void {
+    f.primary = false;
     f.tool = -1;
     f.device = -1;
     f.rearm = -1;
     f.dodge = false;
     f.secondary = false;
+    f.glimpse = false;
   }
 
   /* ================================================================== */
@@ -424,11 +541,13 @@ export class Engine {
     this.transport.send({ type: 'input', frame });
     this.view?.pushInput(frame);
     // Les actions ponctuelles ne valent que pour un tick.
+    this.localInput.primary = false;
     this.localInput.tool = -1;
     this.localInput.device = -1;
     this.localInput.rearm = -1;
     this.localInput.dodge = false;
     this.localInput.secondary = false;
+    this.localInput.glimpse = false;
   }
 
   /* ================================================================== */
@@ -437,15 +556,31 @@ export class Engine {
 
   private onMessage(m: NetMessage): void {
     switch (m.type) {
-      case 'input':
+      case 'input': {
         if (!this.isHost) return;
-        if (m.frame.seq <= this.lastAckSeq) return;
-        this.lastAckSeq = m.frame.seq;
-        this.remoteInput = m.frame;
+        if (m.frame.seq <= this.lastQueuedSeq) return;
+        this.lastQueuedSeq = m.frame.seq;
+        this.remoteQueue.push(m.frame);
+        // L'hôte a pris un retard énorme (onglet en arrière-plan) : on ne
+        // rejoue pas des secondes de marche d'un bloc. Les trames écartées
+        // cèdent leurs impulsions à la suivante — un clic n'est jamais perdu.
+        while (this.remoteQueue.length > REMOTE_QUEUE_MAX) {
+          const dropped = this.remoteQueue.shift()!;
+          mergePulses(this.remoteQueue[0], dropped);
+        }
         break;
+      }
 
       case 'snapshot':
         if (this.isHost) return;
+        // Le passage en invasion n'est annoncé qu'une fois, sans accusé. S'il
+        // se perdait, l'invité restait en compte à rebours : il n'envoyait plus
+        // une seule entrée, et ne bougeait plus de toute la manche. L'instantané,
+        // lui, arrive vingt fois par seconde et porte la phase : il répare.
+        if (m.snap.phase === 'invasion' && this.state.phase !== 'invasion') {
+          this.state.phase = 'invasion';
+          this.emit();
+        }
         this.view?.applySnapshot(m.snap, performance.now());
         this.state.score = m.snap.score;
         this.state.timeLeft = m.snap.timeLeft;
@@ -520,11 +655,15 @@ export class Engine {
       }
     }
 
-    if (m.phase === 'countdown' && m.planId) {
+    // L'ouverture de la manche peut arriver plusieurs fois (voir `resendIntro`),
+    // y compris déjà en invasion : on n'ouvre la vue qu'une fois par manche,
+    // sinon on effacerait tout ce qu'elle a déjà appris du château.
+    if ((m.phase === 'countdown' || m.phase === 'invasion') && m.planId && this.viewRound !== m.round) {
       this.state.planId = m.planId;
       this.state.role = m.role;
       this.state.intel = m.intel ?? null;
       this.openView(m.planId, m.role);
+      this.viewRound = m.round;
     }
 
     if (m.phase === 'round_end') {
@@ -667,13 +806,15 @@ export class Engine {
     this.lastAckSeq = 0;
     this.seq = 0;
     this.localInput = emptyInput();
-    this.remoteInput = emptyInput();
+    this.remoteQueue = [];
+    this.remoteLast = emptyInput();
+    this.lastQueuedSeq = 0;
 
     this.state.phase = 'countdown';
     this.phaseEndsAt = performance.now() + CFG.match.countdown * 1000;
     this.state.timeLeft = CFG.match.countdown;
 
-    this.transport.send({
+    this.intro = {
       type: 'phase',
       phase: 'countdown',
       round,
@@ -682,7 +823,9 @@ export class Engine {
       score: { host: this.match.host.score, guest: this.match.guest.score },
       planId,
       intel: peerRole === 'invader' ? intel : undefined,
-    });
+    };
+    this.introAcc = 0;
+    this.transport.send(this.intro);
     this.emit();
   }
 
@@ -735,6 +878,28 @@ export class Engine {
     this.emit();
   }
 
+  /**
+   * Renvoie l'ouverture de la manche toutes les demi-secondes, jusqu'à la
+   * première entrée de l'invité — la preuve qu'il a sa vue et qu'il joue.
+   *
+   * Perdu, ce message laissait l'invité sans plan ni rôle : écran de compte à
+   * rebours figé, et rien pour s'en sortir. Il part avec le temps restant À
+   * JOUR, sans quoi chaque renvoi ferait reculer son compte à rebours.
+   */
+  private resendIntro(dt: number, nowMs: number): void {
+    if (!this.intro || this.lastQueuedSeq > 0) return;
+    this.introAcc += dt;
+    if (this.introAcc < 0.5) return;
+    this.introAcc = 0;
+    const inv = this.state.phase === 'invasion';
+    this.transport.send({
+      ...this.intro,
+      phase: inv ? 'invasion' : 'countdown',
+      timeLeft: inv ? Math.max(0, this.world?.timeLeft ?? 0) : Math.max(0, (this.phaseEndsAt - nowMs) / 1000),
+      score: { host: this.match.host.score, guest: this.match.guest.score },
+    });
+  }
+
   private broadcastPhase(): void {
     this.transport.send({
       type: 'phase',
@@ -747,6 +912,7 @@ export class Engine {
   }
 
   private openView(planId: PlanId, role: Role): void {
+    this.viewRound = this.state.round;
     const plan = getPlan(planId);
     const spawn = role === 'invader' ? plan.invaderSpawn : plan.castellanSpawn;
     this.view = new ClientView(plan, role, spawn);

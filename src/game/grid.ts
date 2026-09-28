@@ -11,6 +11,15 @@ export function idx(x: number, y: number): number {
   return y * GRID_W + x;
 }
 
+/**
+ * Part minimale d'un pas conservée en glissant autour d'un angle saillant.
+ *
+ * Sans elle, viser pile un coin faisait glisser à la vitesse du sinus de
+ * l'écart — quelques pour cent. À 0,7, on contourne un montant de porte d'un
+ * mouvement franc, sans pour autant filer comme sur de la glace.
+ */
+const CORNER_GLIDE = 0.7;
+
 export function inBounds(x: number, y: number): boolean {
   return x >= 0 && y >= 0 && x < GRID_W && y < GRID_H;
 }
@@ -383,81 +392,169 @@ export class CastleRuntime {
   /* ---------------- Collision cercle / tuiles ---------------- */
 
   /**
-   * Déplace un cercle de rayon `r` de `pos` vers `pos + delta`, en résolvant
-   * les axes séparément (glissement le long des murs).
+   * Déplace un cercle de rayon `r` de `pos` vers `pos + delta`.
+   *
+   * Résolution par EXPULSION : on avance, puis on repousse le cercle hors de
+   * chaque tuile qu'il chevauche, le long de la normale de contact.
+   *
+   * L'ancienne méthode résolvait les deux axes séparément. Contre un angle
+   * saillant — un montant de porte, un pilier — avec deux touches enfoncées,
+   * le pas en x ET le pas en y rapprochaient chacun le cercle du sommet : les
+   * deux étaient refusés, et le joueur restait figé, sans bouger d'un
+   * millième, tant qu'il ne lâchait pas une touche. Mesuré sur les trois
+   * châteaux : 7,6 % des déplacements finissaient ainsi.
+   *
+   * Contre un sommet, la normale est oblique : l'expulsion ne retire que la
+   * part du mouvement qui s'enfonce dans la pierre, et le reste fait glisser
+   * le cercle autour de l'angle. Contre une face, elle est perpendiculaire au
+   * mur : on longe le mur, exactement comme avant.
    */
   moveCircle(pos: Vec, delta: Vec, r: number, role: Role, now: number, flying = false): Vec {
-    let { x, y } = pos;
+    // Point de départ déjà dans la pierre (un éboulement, une herse tombée
+    // dessus) : on le dégage d'abord, sinon tout déplacement serait refusé
+    // pour toujours — l'expulsion ne sait pas repartir d'une position fausse.
+    const p = this.circleHits(pos.x, pos.y, r, role, now, flying)
+      ? this.nearestFree(pos, r, role, now, flying)
+      : { x: pos.x, y: pos.y };
 
-    /** Distance libre le long d'un axe, par dichotomie : on colle au mur. */
-    const slide = (from: number, amount: number, along: 'x' | 'y'): number => {
-      const dir = Math.sign(amount);
-      let lo = 0;
-      let hi = Math.abs(amount);
-      for (let k = 0; k < 5; k++) {
-        const mid = (lo + hi) / 2;
-        const hit =
-          along === 'x'
-            ? this.circleHits(from + dir * mid, y, r, role, now, flying)
-            : this.circleHits(x, from + dir * mid, r, role, now, flying);
-        if (hit) hi = mid;
-        else lo = mid;
+    const len = Math.hypot(delta.x, delta.y);
+    if (len < 1e-9) return p;
+
+    // Sous-pas d'un demi-rayon au plus : une cloison d'une tuile ne peut
+    // jamais être traversée d'un seul bond, même à la vitesse d'une esquive.
+    const n = Math.max(1, Math.ceil(len / (r * 0.5)));
+    const sx = delta.x / n;
+    const sy = delta.y / n;
+    const stepLen = len / n;
+
+    for (let k = 0; k < n; k++) {
+      const bx = p.x;
+      const by = p.y;
+      p.x += sx;
+      p.y += sy;
+      const hit = this.pushOut(p, r, role, now, flying);
+
+      // Glissade d'angle. Contre un sommet abordé presque de face, l'expulsion
+      // seule laisse un glissement proportionnel au sinus de l'angle — quasi
+      // nul si l'on vise pile le coin : on s'y collait à 4 % de sa vitesse.
+      // On garantit donc une fraction franche du pas le long de la tangente,
+      // du côté où l'on allait déjà. Réservé aux SOMMETS : contre une face,
+      // pousser droit dans le mur ne doit pas faire filer de côté.
+      if (hit && hit.vertex && hit.nx * sx + hit.ny * sy < 0) {
+        const want = stepLen * CORNER_GLIDE;
+        if (Math.hypot(p.x - bx, p.y - by) < want) {
+          let tx = -hit.ny;
+          let ty = hit.nx;
+          if (tx * sx + ty * sy < 0) {
+            tx = -tx;
+            ty = -ty;
+          }
+          const g = { x: bx + tx * want, y: by + ty * want };
+          this.pushOut(g, r, role, now, flying);
+          if (!this.circleHits(g.x, g.y, r, role, now, flying)) {
+            p.x = g.x;
+            p.y = g.y;
+          }
+        }
       }
-      return dir * lo;
-    };
 
-    if (delta.x !== 0) {
-      const nx = x + delta.x;
-      if (!this.circleHits(nx, y, r, role, now, flying)) {
-        x = nx;
-      } else {
-        x += slide(x, delta.x, 'x');
-        // Dégagement d'angle. Sans ça, un joueur qui longe un mur et déborde
-        // d'un dixième de tuile sur la rangée suivante se retrouve collé à un
-        // coin, et doit reculer pour repartir : c'est le genre d'accrochage
-        // qui ruine la sensation de déplacement.
-        if (delta.y === 0) y += this.cornerAssist(x, y, delta.x, 0, r, role, now, flying);
+      // Garde-fou : un pas qu'on ne sait pas résoudre proprement est refusé
+      // plutôt que de laisser le cercle entamer la pierre.
+      if (this.circleHits(p.x, p.y, r, role, now, flying)) {
+        p.x = bx;
+        p.y = by;
+        break;
       }
     }
-
-    if (delta.y !== 0) {
-      const ny = y + delta.y;
-      if (!this.circleHits(x, ny, r, role, now, flying)) {
-        y = ny;
-      } else {
-        y += slide(y, delta.y, 'y');
-        if (delta.x === 0) x += this.cornerAssist(x, y, 0, delta.y, r, role, now, flying);
-      }
-    }
-
-    return { x, y };
+    return p;
   }
 
   /**
-   * Petit décalage perpendiculaire qui permet de contourner un angle au lieu
-   * de s'y coincer. N'est tenté que sur un déplacement en ligne droite : en
-   * diagonale, un coin bloqué des deux côtés est un vrai coin, et il doit le
-   * rester.
+   * Repousse le cercle hors des tuiles bloquantes qu'il chevauche.
+   *
+   * On traite la tuile la PLUS ENFONCÉE d'abord, puis on recommence : c'est ce
+   * qui évite qu'une jointure entre deux dalles d'un même mur plat ne dévie le
+   * cercle de côté. Rend la normale du premier contact, et s'il s'agissait d'un
+   * sommet plutôt que d'une face.
    */
-  private cornerAssist(
-    x: number,
-    y: number,
-    dx: number,
-    dy: number,
+  private pushOut(
+    p: Vec,
     r: number,
     role: Role,
     now: number,
     flying: boolean,
-  ): number {
-    const reach = 0.24;
-    for (const sgn of [1, -1]) {
-      const ox = dy !== 0 ? sgn * reach : 0;
-      const oy = dx !== 0 ? sgn * reach : 0;
-      if (this.circleHits(x + ox, y + oy, r, role, now, flying)) continue;
-      if (this.circleHits(x + ox + dx, y + oy + dy, r, role, now, flying)) continue;
-      return (dx !== 0 ? oy : ox) * 0.55;
+  ): { vertex: boolean; nx: number; ny: number } | null {
+    let first: { vertex: boolean; nx: number; ny: number } | null = null;
+    for (let iter = 0; iter < 4; iter++) {
+      let best = 0;
+      let bx = 0;
+      let by = 0;
+      let bv = false;
+      const x0 = Math.floor(p.x - r);
+      const x1 = Math.floor(p.x + r);
+      const y0 = Math.floor(p.y - r);
+      const y1 = Math.floor(p.y + r);
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          if (!this.blocksMove(tx, ty, role, now, flying)) continue;
+          const cx = Math.max(tx, Math.min(p.x, tx + 1));
+          const cy = Math.max(ty, Math.min(p.y, ty + 1));
+          const dx = p.x - cx;
+          const dy = p.y - cy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= r * r) continue;
+
+          let pen: number;
+          let ux: number;
+          let uy: number;
+          let vertex: boolean;
+          if (d2 > 1e-12) {
+            const d = Math.sqrt(d2);
+            pen = r - d;
+            ux = dx / d;
+            uy = dy / d;
+            // Le point le plus proche est borné sur les DEUX axes : c'est un sommet.
+            vertex = cx !== p.x && cy !== p.y;
+          } else {
+            // Le centre est entré dans la tuile : on sort par la face la plus proche.
+            const l = p.x - tx;
+            const rr = tx + 1 - p.x;
+            const t = p.y - ty;
+            const b = ty + 1 - p.y;
+            const m = Math.min(l, rr, t, b);
+            vertex = false;
+            if (m === l) {
+              ux = -1;
+              uy = 0;
+              pen = l + r;
+            } else if (m === rr) {
+              ux = 1;
+              uy = 0;
+              pen = rr + r;
+            } else if (m === t) {
+              ux = 0;
+              uy = -1;
+              pen = t + r;
+            } else {
+              ux = 0;
+              uy = 1;
+              pen = b + r;
+            }
+          }
+          if (pen > best) {
+            best = pen;
+            bx = ux;
+            by = uy;
+            bv = vertex;
+          }
+        }
+      }
+      if (best <= 0) break;
+      p.x += bx * (best + 1e-7);
+      p.y += by * (best + 1e-7);
+      if (!first) first = { vertex: bv, nx: bx, ny: by };
     }
-    return 0;
+    return first;
   }
 
   circleHits(cx: number, cy: number, r: number, role: Role, now: number, flying = false): boolean {
@@ -479,15 +576,31 @@ export class CastleRuntime {
     return false;
   }
 
-  /** Cherche la case libre la plus proche : anti-blocage après un éboulement. */
-  nearestFree(pos: Vec, r: number, role: Role, now: number): Vec {
-    if (!this.circleHits(pos.x, pos.y, r, role, now)) return pos;
-    for (let ring = 1; ring <= 6; ring++) {
-      for (let a = 0; a < 16; a++) {
-        const ang = (a / 16) * Math.PI * 2;
-        const p = { x: pos.x + Math.cos(ang) * ring * 0.6, y: pos.y + Math.sin(ang) * ring * 0.6 };
-        if (!this.circleHits(p.x, p.y, r, role, now)) return p;
+  /**
+   * La position libre la plus proche : dégagement après un éboulement ou une
+   * herse tombée sur quelqu'un.
+   *
+   * Deux garanties que l'ancienne version n'offrait pas. Les candidats sont
+   * explorés par anneaux serrés (0,2 tuile), donc le dégagement est aussi
+   * court que possible. Et un candidat n'est retenu que s'il est en ligne de
+   * vue du point de départ : on ne ressort jamais quelqu'un de l'autre côté
+   * d'une cloison, ce qui revenait à le téléporter dans la pièce voisine.
+   */
+  nearestFree(pos: Vec, r: number, role: Role, now: number, flying = false): Vec {
+    if (!this.circleHits(pos.x, pos.y, r, role, now, flying)) return pos;
+    for (const needSight of [true, false]) {
+      for (let ring = 1; ring <= 18; ring++) {
+        const rad = ring * 0.2;
+        for (let a = 0; a < 24; a++) {
+          const ang = (a / 24) * Math.PI * 2;
+          const p = { x: pos.x + Math.cos(ang) * rad, y: pos.y + Math.sin(ang) * rad };
+          if (this.circleHits(p.x, p.y, r, role, now, flying)) continue;
+          if (needSight && !this.losClear(pos, p)) continue;
+          return p;
+        }
       }
+      // Aucune issue en ligne de vue : mieux vaut une case libre derrière un
+      // mur qu'un joueur emmuré pour le reste de la manche.
     }
     return pos;
   }

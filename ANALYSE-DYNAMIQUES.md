@@ -10,7 +10,110 @@ boucles de trente secondes, les anti-patrons. Le reste du document s'y réfère.
 
 ---
 
-## 1. Ce qui a été corrigé dans cette passe
+## 0. Deuxième passe : « ça bugue, et parfois on ne peut plus bouger »
+
+Cette plainte avait plusieurs causes indépendantes. Chacune a été **mesurée
+avant d'être corrigée**, et chaque correction a un test qui échoue sur l'ancien
+code — vérifié en faisant tourner les tests sur une copie de la version
+précédente.
+
+### 0.1 Figé contre un angle — la cause principale
+
+Deux touches enfoncées (une diagonale) contre un angle saillant — un montant de
+porte, un pilier — et le joueur ne bougeait plus d'un millième tant qu'il ne
+lâchait pas une touche. La collision résolvait les deux axes séparément ; contre
+un sommet, chacun rapprochait le cercle du coin, et les deux étaient refusés. Le
+« dégagement d'angle » censé l'éviter ne se déclenchait presque jamais : il
+testait une vitesse *exactement* nulle, que l'inertie n'atteint qu'après 12 s.
+
+**Mesuré sur tout le château (`npm run sweep`) : 7,6 % des déplacements
+finissaient figés — 2 630 situations. Après : 0 sur 34 600.**
+
+La collision fonctionne désormais par **expulsion** : on avance, puis on repousse
+le cercle hors de la pierre le long de la normale de contact. Contre un sommet,
+cette normale est oblique et le joueur glisse autour de l'angle. Un test de
+propriété vérifie qu'on ne traverse jamais un mur, même à 9 tuiles/s depuis
+chaque dalle dans seize directions.
+
+### 0.2 Figé sur place en appuyant sur Espace
+
+Espace est la touche de course de l'Envahisseur. Chez le Châtelain, elle
+lançait la Scrutation, qui **immobilisait le corps : 0 % de sa vitesse**. Un
+joueur qui changeait de rôle entre deux manches appuyait par réflexe et ne
+comprenait pas pourquoi il ne bougeait plus. La Scrutation est retirée (voir 0.7).
+
+### 0.3 Ralenti de moitié en gardant le clic enfoncé
+
+Le clic gauche transmettait l'état du bouton, pas un clic : le garder enfoncé
+enchaînait les coups sans fin, et chaque coup ralentit. **Mesuré : 49 % de la
+vitesse normale, 22 % en allure prudente.** Un clic donne maintenant un coup, et
+un clic tombé pendant la récupération est mémorisé un quart de seconde au lieu
+d'être perdu.
+
+### 0.4 Une touche ignorée après un Alt+Tab
+
+Revenir dans la fenêtre sans relâcher Z : le navigateur n'envoie plus que des
+répétitions, que le code jetait *avant* de réenregistrer la touche. Le
+personnage refusait d'avancer jusqu'à ce qu'on relâche et ré-enfonce.
+
+### 0.5 L'invité recalé dix fois par seconde
+
+Mesuré avec les vrais moteurs derrière un réseau simulé (`npm run netbench`),
+sans que personne ne touche l'invité :
+
+| Réseau | Recalages/s avant | après | Pire recalage avant | après |
+|---|---|---|---|---|
+| Même machine | 10,5 | **0** | 0,42 tuile | **0** |
+| Fibre | 9,7 | **0,05** | 0,42 | 0,09 |
+| Wifi chargé | 6,4 | **0,10** | 0,54 | 0,10 |
+| 4G médiocre | 6,4 | **0,15** | 0,71 | 0,10 |
+
+Quatre causes, toutes corrigées :
+
+- **L'hôte écrasait la trame de l'invité au lieu de la consommer.** Deux trames
+  entre deux ticks : le pas de la première disparaissait mais était acquitté.
+  Aucune : la même était jouée deux fois. C'est maintenant une file, jouée
+  exactement une fois par trame.
+- **Deux modèles de déplacement.** L'hôte avait de l'inertie, l'invité non ;
+  l'invité ne prédisait pas ses esquives (jusqu'à 1,9 tuile d'écart) et restait
+  figé plus longtemps que son étourdissement réel. Il n'y a plus qu'un modèle,
+  `movement.ts`, exécuté des deux côtés.
+- **Tout l'écran traînait de 70 ms**, hôte compris : l'affichage poursuivait la
+  position par un filtre, et la caméra et la visée suivaient cette position en
+  retard. On interpole désormais entre les deux derniers pas simulés.
+- **Des impulsions perdues** : une esquive ou un tir tombé entre deux ticks
+  disparaissait.
+
+### 0.6 Deux blocages d'une manche entière
+
+- **La partie au ralenti dès que la fenêtre de l'hôte passait derrière une
+  autre.** La simulation suivait le rafraîchissement d'écran, que le navigateur
+  bride à ~1 image/s. Un worker non bridé réveille maintenant la boucle.
+- **L'invité figé toute la manche si un message se perdait.** Le passage en
+  invasion n'était annoncé qu'une fois, sans accusé ; perdu, l'invité n'envoyait
+  plus une seule entrée. L'instantané porte désormais la phase, et l'hôte
+  renvoie l'ouverture de manche jusqu'à la première entrée de l'invité.
+
+### 0.7 La vision redistribuée
+
+À la demande du joueur :
+
+- **Le Châtelain perd la Scrutation.** Il garde ses trois yeux de guet, qui
+  voient à travers les murs : c'est sa seule vision à distance. L'Influence, qui
+  ne servait qu'à elle, disparaît du HUD.
+- **L'Envahisseur gagne trois coups d'œil à la carte de cinq secondes** (M). Le
+  tracé du château, sans le Châtelain, les pièges ni le Cœur. Rien de ce qu'il y
+  voit n'entre dans sa mémoire du plan — sans quoi le premier coup d'œil aurait
+  rendu les deux autres inutiles. Le prix n'est pas l'immobilité, mais
+  l'aveuglement : la caméra recule, et l'on ne voit plus venir le danger.
+
+Le tracé transmis masque les passages secrets en murs : la valeur brute les
+aurait livrés à quiconque ouvre l'inspecteur réseau — un défaut qui existait
+déjà dans l'exploration normale, corrigé du même coup.
+
+---
+
+## 1. Première passe
 
 Quatre défauts constatés en jouant. Trois étaient des bugs, un était une règle
 qui produisait le contraire de son intention.
@@ -144,9 +247,10 @@ sur la simulation réelle, pas sur la configuration.
 
 ## 3. État des cinq tensions
 
-**« L'omniscience se paie toujours. »** — *Tenue.* La Scrutation coûte 5/s, le
-Cœur ne recharge plus celui qui scrute, et l'œil de guet consomme une réserve
-finie. Aucun canal de vision n'est gratuit.
+**« L'omniscience se paie toujours. »** — *Tenue, et mieux répartie.* Il n'y a
+plus d'omniscience à durée libre : l'œil de guet consomme une réserve finie, et
+le coup d'œil à la carte est compté (trois fois cinq secondes) et payé par
+l'aveuglement local. Aucun canal de vision n'est gratuit.
 
 **« Un Châtelain qui campe est structurellement perdant. »** — *Tenue depuis
 cette passe, pas avant.* Voir 1.4. C'était le trou principal.
@@ -178,8 +282,11 @@ humains ; c'est la seule mesure qui vaudra.
 
 **L'asymétrie s'est amincie.** Les deux camps ont désormais la même épée, la
 même arbalète et la même vitesse. Ce qui distingue réellement les rôles : le
-Châtelain connaît le plan, dispose de la Scrutation, des mécanismes et des
-yeux ; l'Envahisseur a les trois allures, l'esquive et l'initiative. C'est
+Châtelain connaît le plan en permanence et a ses trois yeux ; l'Envahisseur a
+les trois allures, l'esquive, l'initiative et trois coups d'œil à la carte.
+Sans Scrutation, le Châtelain est nettement moins omniscient qu'avant : si les
+Envahisseurs se mettent à gagner trop souvent, c'est ici qu'il faut regarder
+d'abord — la réserve des yeux ou leur rayon. C'est
 défendable — l'avantage vient du terrain, pas de l'acier — mais c'est une
 asymétrie de **connaissance**, plus de **capacité**. Si les parties se mettent
 à se ressembler, c'est le premier levier à rouvrir.
@@ -208,17 +315,26 @@ manches où il a déjà échoué une fois.
 
 ## 5. Vérifications exécutées
 
-- `npm run check` — typage, plans, duel, 112 tests unitaires.
-- `npm run duel` — épées identiques, rebonds plafonnés, carreau qui blesse son
-  tireur, veille qui se consomme et s'épuise, chrono suspendu et redémarré.
-- `tests/watch.test.ts` — 13 tests neufs : vision à travers les murs bornée au
-  cercle, réserve non facturée deux fois, avertissement filtré dans les deux
-  sens, chrono gelé, absence de régénération pendant la contestation, et la
-  prédiction client qui ne se cogne plus dans l'inexploré tout en s'arrêtant
-  sur un mur transmis.
-- `npm run build` puis `npm run e2e` — une session complète jouée dans un vrai
+- `npm run check` — typage, plans, duel, balayage des angles (0 pincement sur
+  34 600 déplacements) et **130 tests unitaires**, tous verts.
+- `tests/net.test.ts` — les vrais moteurs derrière un réseau simulé : zéro
+  recalage sur une même machine, moins de 0,5/s en 4G médiocre, chaque esquive
+  appuyée exécutée, et l'invité qui joue quand même si l'annonce d'invasion ou
+  l'ouverture de manche se perd. **Ces cinq tests échouent tous sur l'ancien
+  code** : ce sont bien les corrections qui les font passer.
+- `tests/grid.test.ts` — aucune traversée de mur à 9 tuiles/s sur les trois
+  plans, les quatre coins d'un pilier contournés en diagonale sans un tick figé,
+  aucun dérapage latéral contre un mur plat.
+- `tests/sim.test.ts` — Scrutation impossible même envoyée par un client
+  trafiqué, Espace qui ne fige plus, trois coups d'œil de cinq secondes, rien
+  versé dans la mémoire du plan, inaccessible au Châtelain.
+- `npm run playtest` — 36 manches de robots, toutes terminées, aucune fuite
+  d'information.
+- `npm run build` puis `npm run e2e` — une session complète dans un vrai
   navigateur : création, connexion, préparation, invasion, déplacement,
-  changements d'allure, Scrutation. **Zéro erreur de console.**
+  changements d'allure, coup d'œil à la carte qui se replie seul en consommant
+  exactement une charge, Espace sans effet chez le Châtelain. **Zéro erreur de
+  console.**
 
 Ce qui n'a pas pu être vérifié : le mode à distance. Le bac à sable bloque les
 WebSockets sortants, donc le transport Supabase est inatteignable d'ici. Le

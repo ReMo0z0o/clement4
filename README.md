@@ -10,10 +10,16 @@ de présence — ou tuer le Châtelain, avant la fin du chrono.
 **Les deux camps portent les mêmes armes** : une épée au clic gauche, une
 arbalète au clic droit. Le carreau d'arbalète **rebondit jusqu'à trois fois sur
 les murs** — et après le premier rebond, il ne fait plus la différence entre les
-deux joueurs. Le Châtelain compense par le terrain : il connaît son château, ses
-trois **yeux de guet** le montrent **à travers les murs** tant qu'il est dans
-leur cercle, et sa Scrutation lui montre tout — au prix de son corps laissé sans
-défense.
+deux joueurs. Le Châtelain compense par le terrain : il connaît son château, et
+ses trois **yeux de guet** lui montrent l'intrus **à travers les murs** tant
+qu'il est dans leur cercle. C'est sa seule vision à distance : il ne voit plus le
+château d'en haut.
+
+La vue d'ensemble appartient désormais à l'**Envahisseur** : **trois coups d'œil
+à la carte** (touche **M**) de **cinq secondes** chacun. Tout le tracé du château
+s'affiche — ni le Châtelain, ni les pièges, ni le Cœur. Rien de ce qu'il y voit
+ne reste en mémoire, et pendant ces cinq secondes la caméra, reculée jusqu'à
+montrer tout le château, ne lui laisse pas voir venir le danger.
 
 Deux règles décident du rythme de la fin de manche. Un œil de guet n'a que
 **dix-huit secondes de veille en réserve** : l'Envahisseur, qui est prévenu
@@ -139,7 +145,9 @@ variables d'environnement du projet Vercel, puis redéployez.
 | `npm test` | Tests de la simulation, en Node, sans navigateur |
 | `npm run plans` | Valide la topologie des trois châteaux |
 | `npm run playtest` | Fait jouer deux robots des dizaines de manches |
-| `npm run duel` | Vérifie que le Châtelain perd un duel loyal |
+| `npm run duel` | Vérifie les armes communes, les guets et le Cœur disputé |
+| `npm run netbench` | Fait jouer les deux moteurs derrière un réseau simulé et mesure les recalages |
+| `npm run sweep` | Cherche, sur tout le château, les angles où le joueur resterait coincé |
 | `npm run e2e` | Joue une session complète dans un vrai navigateur (serveur `dev` requis) |
 | `npm run supabase:check` | Vérifie qu'une configuration Supabase permet réellement de jouer |
 
@@ -157,13 +165,16 @@ de clavier.
 | Épée | clic gauche | clic gauche |
 | **Arbalète** (le carreau rebondit ×3) | clic droit | clic droit |
 | **Maj (maintenu)** | avancer prudemment | — |
-| **Espace (maintenu)** | courir | **Scrutation** |
+| **Espace (maintenu)** | courir | — |
 | F | esquive roulée | — |
+| **M** | **coup d'œil à la carte** (3 × 5 s ; M replie) | — |
 | E | allumer un brasero | interagir |
 | ² ou ~ | panneau de réglage | panneau de réglage |
 
-`Espace` maintenu est la grande touche des deux camps. Aucun des deux rôles ne
-peut faire les deux : la touche n'est jamais ambiguë.
+Un clic gauche donne **un** coup d'épée. Garder le bouton enfoncé n'enchaîne
+plus les coups — ce qui ralentissait le joueur de moitié sans qu'il comprenne
+pourquoi. Un clic tombé pendant la récupération d'un coup n'est pas perdu : il
+part dès que possible, dans le quart de seconde qui suit.
 
 ---
 
@@ -173,8 +184,9 @@ peut faire les deux : la touche n'est jamais ambiguë.
 src/game/      simulation pure — ni React, ni DOM, testable en Node
   config.ts      TOUTES les constantes de gameplay, sans exception
   types.ts       le contrat partagé par le réseau, le rendu et l'UI
-  grid.ts        collisions, ligne de vue, lumière, pièces
-  sim.ts         la manche : acteurs, pièges, capture, Influence
+  grid.ts        collisions (par expulsion), ligne de vue, lumière, pièces
+  movement.ts    LE modèle de déplacement, partagé par l'hôte et l'invité
+  sim.ts         la manche : acteurs, pièges, capture, guets
   prep.ts        budgets et placement, revalidés côté hôte
   snapshot.ts    filtrage de l'information par destinataire
   match.ts       l'arc des quatre manches
@@ -195,6 +207,12 @@ src/components/ React — le HUD et les écrans, rien d'autre
 `requestAnimationFrame`, à pas fixe de 30 ticks/s avec accumulateur. React ne
 rend que le HUD, rafraîchi à 10 Hz. Aucune entité n'existe dans le DOM.
 
+Un **worker** sert de battement de secours : dès que la fenêtre passe derrière
+une autre, le navigateur bride `requestAnimationFrame` à environ une image par
+seconde, et comme la simulation ne vit que chez l'hôte, toute la manche tombait
+au ralenti pour les deux joueurs. Le worker n'est pas bridé ; il ne fait que
+réveiller la boucle quand l'écran a cessé de le faire.
+
 ### Autorité et réseau
 
 Le créateur de la session est l'**hôte** et le reste tout le match, quel que soit
@@ -202,13 +220,37 @@ son rôle dans la manche en cours. Il fait tourner la simulation autoritative ;
 l'invité envoie ses entrées à 30 Hz, reçoit des instantanés à 20 Hz, et prédit
 localement son propre déplacement avec réconciliation sur `ackSeq`.
 
+Trois choses rendent cette prédiction juste, et chacune a sa mesure dans
+`npm run netbench` et ses tests dans `tests/net.test.ts` :
+
+- **Un seul modèle.** L'hôte et l'invité avancent le joueur par le même code
+  (`movement.ts`) : même inertie, même esquive, mêmes états datés.
+- **Une file, pas un niveau.** Chaque trame de l'invité est jouée exactement une
+  fois, dans l'ordre ; l'acquittement ne couvre que ce qui l'a réellement été.
+  Une trame en retard est remplacée par une trame *retenue*, qui ne déplace
+  personne : la position reste une fonction exacte des trames reçues.
+- **On lisse la correction, pas le mouvement.** L'affichage glisse entre les
+  deux derniers pas simulés (un tick de retard au plus) au lieu de poursuivre la
+  position — ce qui ajoutait 70 ms à tout l'écran, hôte compris.
+
+Mesuré sans que personne ne touche l'invité : **10,5 recalages par seconde
+avant, 0 après** sur une même machine ; **6,4 contre 0,15** sur une 4G médiocre
+(90 ms ± 70 ms), avec des recalages cinq fois plus petits.
+
+Les messages de phase ne sont envoyés qu'une fois et Supabase n'en accuse pas
+réception. L'invité se répare seul : l'instantané porte la phase, et l'hôte
+renvoie l'ouverture de manche (plan, rôle) jusqu'à la première entrée de
+l'invité.
+
 **L'hôte filtre chaque instantané selon ce que son destinataire a le droit de
 percevoir.** C'est la règle centrale du projet : dans un jeu à information
 cachée, transmettre une donnée en comptant sur l'affichage pour la masquer est
 la faille la plus évidente qui soit. Concrètement, l'Envahisseur ne reçoit
-jamais la position du Châtelain qu'il ne voit pas, ni l'Influence de celui-ci,
-ni la liste de ses pièges, ni le tracé d'un mur qu'il n'a pas exploré — les
-tuiles lui sont envoyées en delta, au fur et à mesure qu'il les découvre.
+jamais la position du Châtelain qu'il ne voit pas, ni la liste de ses pièges ou
+de ses guets, ni le tracé d'un mur qu'il n'a pas exploré — les tuiles lui sont
+envoyées en delta, au fur et à mesure qu'il les découvre, et **telles qu'il les
+voit** : un passage secret part comme un mur. Le tracé complet ne lui parvient
+que pendant un coup d'œil à la carte, et jamais dans sa mémoire du plan.
 
 `auditSnapshot()` vérifie cette propriété, et `npm run playtest` l'exécute sur
 soixante manches.
@@ -249,18 +291,21 @@ du travail se ferait au détriment du plaisir de jeu.
   React qui fermait la connexion à peine ouverte, et un Châtelain qui ne
   recevait jamais les tuiles de son propre château.
 
-### Un arbitrage signalé
+### Deux arbitrages signalés
 
-Le cahier des charges fixe la régénération d'Influence au Cœur à **+7/s** et le
-coût de la Scrutation à **−5/s**. Pris à la lettre, ces deux nombres donnent
-**+2/s net** : le Châtelain peut rester assis sur son Cœur, omniscient et
-gratuit, en gelant indéfiniment la capture. Cela contredit deux tensions de la
-section 2 à la fois — « l'omniscience doit toujours se payer » et « un Châtelain
-qui campe doit être structurellement perdant ».
+**La Scrutation n'existe plus.** Le cahier des charges en faisait le cœur du
+Châtelain. Elle a été retirée à la demande du joueur, pour deux raisons que les
+mesures confirment : Espace maintenu figeait le Châtelain à 0 % de sa vitesse, et
+un joueur qui appuyait par réflexe — c'est la touche de course de l'autre rôle —
+se retrouvait incapable de bouger ; et avec ses yeux de guet, il cumulait deux
+sources d'omniscience là où l'Envahisseur n'en avait aucune. L'Influence, qui ne
+servait qu'à elle et aux mécanismes, a disparu du HUD. La vue d'ensemble est
+passée à l'Envahisseur, bornée à trois fois cinq secondes.
 
-Le correctif retenu est le plus petit possible : **le Cœur ne recharge pas celui
-qui scrute** (`sim.ts`, `updateInfluence`). Les deux nombres du cahier restent
-intacts ; le Châtelain doit simplement choisir entre recharger et regarder.
+**Le Cœur disputé suspend le chrono.** Le Châtelain gagne au temps écoulé : tant
+que le chrono tournait pendant la contestation, entrer dans la salle et ne rien
+faire était sa meilleure ligne — l'anti-patron que §2 nomme en toutes lettres.
+Le temps s'arrête désormais tant que les deux y sont, et personne ne s'y soigne.
 
 ---
 

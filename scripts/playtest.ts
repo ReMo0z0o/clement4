@@ -131,8 +131,7 @@ interface Report {
   winner: string;
   seconds: number;
   gaitSwitches: number;
-  scryCount: number;
-  scryTime: number;
+  glimpses: number;
   lostCareful: number;
   lostTraps: number;
   lostDetour: number;
@@ -167,8 +166,6 @@ function runRound(planId: PlanId, seed: number): Report {
   /** Dernière position connue de l'Envahisseur, et sa fraîcheur. */
   let lastSeen: Vec | null = null;
   let lastSeenAt = -99;
-  let scryUntil = -1;
-  let nextScryAt = 1.5;
 
   const steps = Math.ceil((CFG.match.roundDuration + 60) / TICK_DT);
   for (let i = 0; i < steps && !w.over; i++) {
@@ -198,6 +195,8 @@ function runRound(planId: PlanId, seed: number): Report {
     const dir = w.castle.descend(field, w.invader.pos);
     invIn.move = dir;
     if (dir.x !== 0 || dir.y !== 0) invIn.aim = Math.atan2(dir.y, dir.x);
+    // Un coup d'œil à la carte au départ, un à mi-manche, un pour la fin.
+    invIn.glimpse = [2, 60, 120].some((t) => Math.abs(w.now - t) < TICK_DT / 2);
 
     const engaged = w.invaderSees() && gap < 2.6;
     if (engaged) {
@@ -229,30 +228,16 @@ function runRound(planId: PlanId, seed: number): Report {
     }
     const fresh = w.now - lastSeenAt < 6;
 
-    // Scrutation par salves : chercher, puis agir. Jamais avec l'autre sur le dos.
-    if (w.now >= nextScryAt && w.influence > 25 && gap > 4) {
-      scryUntil = w.now + 1 + rng() * 1.2;
-      nextScryAt = w.now + 4 + rng() * 3;
-    }
-    casIn.scry = w.now < scryUntil && w.influence > 8 && gap > 3;
-
-    if (casIn.scry) {
-      // Vu d'en haut, il déclenche ce qui se trouve sous les pieds de l'autre.
-      const ready = w.devices.find(
-        (d) =>
-          !d.used &&
-          w.influence >= CFG.devices[d.kind].influence &&
-          dist({ x: d.x, y: d.y }, w.invader.pos) < 2.2,
-      );
-      if (ready) casIn.device = ready.id;
-    } else {
+    // Plus de Scrutation : le Châtelain ne voit que par ses yeux et ses guets.
+    // Il chasse ce qu'il a vu en dernier, et retourne au Cœur sinon.
+    {
       const vulnerable =
         w.invader.state === 'immobile' || w.invader.state === 'stun' || w.invader.hp < 35;
       let target: Vec;
       if (fresh && lastSeen && vulnerable) {
         target = lastSeen; // une ouverture : c'est le seul moment où il fond
-      } else if (w.influence < 55) {
-        target = w.heart; // sa batterie le rappelle
+      } else if (w.castellan.hp < 45) {
+        target = w.heart; // il y retourne se soigner
       } else if (fresh && lastSeen) {
         // Il se rapproche sans se montrer : il veut le recevoir chez lui.
         target = w.captureProgress > 0.15 ? w.heart : lastSeen;
@@ -292,8 +277,7 @@ function runRound(planId: PlanId, seed: number): Report {
     winner: w.over?.winner ?? '—',
     seconds: s.timeElapsed,
     gaitSwitches: s.gaitSwitches,
-    scryCount: s.scryCount,
-    scryTime: s.scryTime,
+    glimpses: CFG.glimpse.charges - w.glimpseCharges,
     lostCareful: s.lostCareful,
     lostTraps: s.lostTraps,
     lostDetour: s.lostDetour,
@@ -390,7 +374,7 @@ for (const p of plans) {
   console.log(`   fuites info   ${leaks.size === 0 ? '✓ aucune' : `✗ ${Array.from(leaks).join(' | ')}`}`);
   console.log(
     `   [indicatif]   ${avg((r) => r.gaitSwitches).toFixed(0)} changements d'allure · ` +
-      `${avg((r) => r.scryCount).toFixed(1)} entrées en Scrutation · ` +
+      `${avg((r) => r.glimpses).toFixed(1)} coups d'œil à la carte · ` +
       `${(avg((r) => r.lostCareful) + avg((r) => r.lostTraps) + avg((r) => r.lostDetour)).toFixed(1)} s perdues`,
   );
   console.log('');

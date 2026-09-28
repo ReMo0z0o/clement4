@@ -6,14 +6,14 @@
  *
  * Le schéma est symétrique entre les deux rôles : même épée au clic gauche,
  * même arbalète au clic droit — son carreau rebondit sur les murs, à manier
- * avec respect dans un couloir. **Espace maintenu est la grande touche des
- * deux camps** — courir pour l'Envahisseur, entrer en Scrutation pour le
- * Châtelain.
+ * avec respect dans un couloir. L'Envahisseur a en plus ses allures, son
+ * esquive et ses trois coups d'œil à la carte (M).
  *
  * Les déplacements acceptent WASD, ZQSD et les flèches : un joueur français ne
  * doit pas avoir à changer de clavier pour jouer.
  */
 
+import { CFG } from '@/game/config';
 import type { Gait, InputFrame, Role, Vec } from '@/game/types';
 import { emptyInput } from '@/game/types';
 
@@ -48,6 +48,7 @@ const SWALLOW = new Set([
   'KeyE',
   'KeyF',
   'KeyR',
+  'KeyM',
   'Digit1',
   'Digit2',
   'Digit3',
@@ -59,9 +60,16 @@ const SWALLOW = new Set([
 export class Controls {
   private keys = new Set<string>();
   private mouse: Vec = { x: 0, y: 0 };
-  private primary = false;
+  /**
+   * Un clic gauche = UN coup d'épée. C'était l'état du bouton qui partait :
+   * le garder enfoncé enchaînait les coups sans fin, et comme chaque coup
+   * ralentit (armement ×0,35, récupération ×0,55), le joueur se traînait à
+   * 49 % de sa vitesse — mesuré — sans comprendre pourquoi.
+   */
+  private pendingPrimary = false;
   private pendingSecondary = false;
   private pendingDodge = false;
+  private pendingGlimpse = false;
   private pendingTool = -1;
   private pendingDevice = -1;
   private pendingRearm = -1;
@@ -78,24 +86,37 @@ export class Controls {
       if (!this.enabled) return;
       // On ne vole jamais le clavier à un champ de saisie.
       if (isTypingTarget(e.target)) return;
-      if (e.repeat) {
-        if (SWALLOW.has(e.code)) e.preventDefault();
-        return;
-      }
+      // La touche est (ré)enregistrée AVANT le filtre de répétition.
+      //
+      // L'ordre inverse figeait le joueur : après un Alt+Tab, le retour de
+      // focus avec Z toujours enfoncé n'envoie plus que des répétitions — le
+      // premier appui a eu lieu dans l'autre fenêtre. Elles étaient jetées
+      // avant d'être notées, et le personnage refusait d'avancer tant qu'on ne
+      // relâchait pas la touche pour la ré-enfoncer.
       this.keys.add(e.code);
+      if (SWALLOW.has(e.code)) e.preventDefault();
+      // Les impulsions, elles, ne partent qu'au premier appui.
+      if (e.repeat) return;
       if (e.code === 'KeyF') this.pendingDodge = true;
+      // La carte est sur M seulement. Sur Tab, chaque Alt+Tab aurait brûlé une
+      // charge : le navigateur reçoit le Tab avant de perdre le focus.
+      if (e.code === 'KeyM') this.pendingGlimpse = true;
       if (e.code === 'Digit1') this.pendingTool = 0;
       if (e.code === 'Digit2') this.pendingTool = 1;
       if (e.code === 'Digit3') this.pendingTool = 2;
-      if (SWALLOW.has(e.code)) e.preventDefault();
     };
     const onKeyUp = (e: KeyboardEvent) => {
       this.keys.delete(e.code);
     };
     const onBlur = () => {
-      // Perdre le focus ne doit pas laisser le personnage courir tout seul.
+      // Perdre le focus ne doit pas laisser le personnage courir tout seul,
+      // ni déclencher au retour une action armée juste avant de partir.
       this.keys.clear();
-      this.primary = false;
+      this.pendingPrimary = false;
+      this.pendingSecondary = false;
+      this.pendingDodge = false;
+      this.pendingGlimpse = false;
+      this.pendingTool = -1;
     };
     const onMove = (e: PointerEvent) => {
       const rect = this.el.getBoundingClientRect();
@@ -103,13 +124,10 @@ export class Controls {
     };
     const onDown = (e: PointerEvent) => {
       if (!this.enabled) return;
-      if (e.button === 0) this.primary = true;
+      if (e.button === 0) this.pendingPrimary = true;
       // Clic droit : un carreau part. Une impulsion, pas un tir en rafale.
       if (e.button === 2) this.pendingSecondary = true;
       this.el.focus();
-    };
-    const onUp = (e: PointerEvent) => {
-      if (e.button === 0) this.primary = false;
     };
     const onContext = (e: Event) => e.preventDefault();
 
@@ -118,7 +136,6 @@ export class Controls {
     window.addEventListener('blur', onBlur);
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerdown', onDown);
-    window.addEventListener('pointerup', onUp);
     el.addEventListener('contextmenu', onContext);
 
     this.detach = [
@@ -127,7 +144,6 @@ export class Controls {
       () => window.removeEventListener('blur', onBlur),
       () => el.removeEventListener('pointermove', onMove),
       () => el.removeEventListener('pointerdown', onDown),
-      () => window.removeEventListener('pointerup', onUp),
       () => el.removeEventListener('contextmenu', onContext),
     ];
   }
@@ -136,7 +152,7 @@ export class Controls {
     this.enabled = v;
     if (!v) {
       this.keys.clear();
-      this.primary = false;
+      this.pendingPrimary = false;
     }
   }
 
@@ -184,23 +200,26 @@ export class Controls {
       // Prudente sur Maj : c'est l'allure la plus utilisée, donc la touche la
       // plus confortable. Course sur Espace, maintenue.
       f.gait = shift ? 'careful' : space ? 'run' : 'normal';
-      f.scry = false;
     } else {
+      // Le Châtelain n'a plus de Scrutation : Espace ne le fige plus.
       f.gait = 'normal';
-      f.scry = space;
     }
+    f.scry = false;
 
-    f.primary = this.primary;
+    f.primary = this.pendingPrimary;
     f.secondary = this.pendingSecondary;
     f.parry = false;
     f.interact = this.keys.has('KeyE');
     f.dodge = this.pendingDodge;
+    f.glimpse = role === 'invader' && this.pendingGlimpse;
     f.tool = this.pendingTool;
     f.device = this.pendingDevice;
     f.rearm = this.pendingRearm;
 
+    this.pendingPrimary = false;
     this.pendingSecondary = false;
     this.pendingDodge = false;
+    this.pendingGlimpse = false;
     this.pendingTool = -1;
     this.pendingDevice = -1;
     this.pendingRearm = -1;
@@ -233,8 +252,9 @@ export function controlHints(role: Role): { keys: string; label: string }[] {
       { keys: 'Maj', label: 'Avancer prudemment (maintenu)' },
       { keys: 'Espace', label: 'Courir (maintenu)' },
       { keys: 'F', label: 'Esquiver' },
+      { keys: 'M', label: `Coup d’œil à la carte (${CFG.glimpse.charges} × ${CFG.glimpse.duration} s)` },
       { keys: 'E', label: 'Allumer un brasero' },
     ];
   }
-  return [...common, { keys: 'Espace', label: 'Scrutation (maintenu)' }];
+  return common;
 }

@@ -34,9 +34,9 @@ export class Camera {
     this.shake = Math.min(CFG.feel.shakeMax, this.shake + amount);
   }
 
-  follow(target: Vec, aim: number, gait: Gait, scrying: boolean, dt: number): void {
-    if (scrying) {
-      // Scrutation : la vue s'élève, tout le château tient à l'écran.
+  follow(target: Vec, aim: number, gait: Gait, wide: boolean, dt: number): void {
+    if (wide) {
+      // Vue d'ensemble (coup d'œil à la carte) : tout le château tient à l'écran.
       this.targetZoom = scryZoom(this.viewW, this.viewH);
       const cx = WORLD_W / 2;
       const cy = WORLD_H / 2;

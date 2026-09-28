@@ -11,7 +11,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CFG, GRID_H, GRID_W } from '../src/game/config';
-import { CastleRuntime, floodRooms, idx, inBounds } from '../src/game/grid';
+import { CastleRuntime, compilePlan, floodRooms, idx, inBounds } from '../src/game/grid';
 import type { Role, TileId, Vec } from '../src/game/types';
 import { T } from '../src/game/types';
 import { floorTiles, makeWorld, plan, PLAN_IDS, rng, run, input } from './helpers';
@@ -130,6 +130,119 @@ describe('collision : on ne finit jamais dans un mur', () => {
         );
       }
     });
+  });
+});
+
+/* ==================================================================== */
+/* Collision par expulsion : ni pincement, ni traversée                 */
+/* ==================================================================== */
+
+describe('collision par expulsion', () => {
+  const R = CFG.invader.radius;
+  const DIRS = Array.from({ length: 16 }, (_, k) => {
+    const a = (k / 16) * Math.PI * 2;
+    return { x: Math.cos(a), y: Math.sin(a) };
+  });
+  // Plus rapide que tout ce que le jeu produit : l'esquive fait 6,3 tuiles/s.
+  const FAST = 9;
+  const DT = 1 / 30;
+
+  for (const id of PLAN_IDS) {
+    test(`${id} : on ne traverse jamais un mur, même à pleine vitesse`, () => {
+      const c = new CastleRuntime(plan(id));
+      let checked = 0;
+      for (const t of floorTiles(c.plan)) {
+        const start = { x: t.x + 0.5, y: t.y + 0.5 };
+        if (c.circleHits(start.x, start.y, R, 'invader', 0)) continue;
+        for (const d of DIRS) {
+          let p = { ...start };
+          for (let k = 0; k < 40; k++) {
+            const next = c.moveCircle(p, { x: d.x * FAST * DT, y: d.y * FAST * DT }, R, 'invader', 0);
+            checked++;
+            assert.ok(
+              !c.circleHits(next.x, next.y, R, 'invader', 0),
+              `${id} : le cercle entame la pierre en (${next.x.toFixed(3)}, ${next.y.toFixed(3)})`,
+            );
+            // Le trajet du centre ne franchit aucune tuile bloquante : sinon on
+            // aurait sauté une cloison d'un seul tick.
+            assert.ok(
+              c.losClear(p, next),
+              `${id} : traversée d'une cloison entre (${p.x.toFixed(2)}, ${p.y.toFixed(2)}) et (${next.x.toFixed(2)}, ${next.y.toFixed(2)})`,
+            );
+            p = next;
+          }
+        }
+      }
+      assert.ok(checked > 10_000, `le balayage n'a couvert que ${checked} pas`);
+    });
+  }
+
+  test('un angle saillant se contourne en diagonale au lieu de figer le joueur', () => {
+    // Une salle synthétique : sol partout, un seul pilier au centre. Ses quatre
+    // coins sont des angles saillants purs, sans mur voisin pour brouiller.
+    const rows = Array.from({ length: GRID_H }, (_, y) =>
+      Array.from({ length: GRID_W }, (_, x) =>
+        x === 0 || y === 0 || x === GRID_W - 1 || y === GRID_H - 1 ? '#' : x === 12 && y === 12 ? '#' : '.',
+      ).join(''),
+    );
+    const c = new CastleRuntime(compilePlan({ id: 'open', name: 'pilier', blurb: '', density: [0, 0], rows }));
+
+    // Quatre approches diagonales, droit sur chacun des quatre coins.
+    for (const [sx, sy] of [
+      [1, 1],
+      [-1, 1],
+      [1, -1],
+      [-1, -1],
+    ]) {
+      const corner = { x: 12 + (sx > 0 ? 0 : 1), y: 12 + (sy > 0 ? 0 : 1) };
+      let p = { x: corner.x - sx * 1.1, y: corner.y - sy * 1.1 };
+      const step = CFG.invader.baseSpeed * DT;
+      let frozen = 0;
+      for (let k = 0; k < 40; k++) {
+        const next = c.moveCircle(p, { x: sx * Math.SQRT1_2 * step, y: sy * Math.SQRT1_2 * step }, R, 'invader', 0);
+        if (Math.hypot(next.x - p.x, next.y - p.y) < step * 0.05) frozen++;
+        p = next;
+      }
+      assert.equal(frozen, 0, `figé ${frozen} ticks contre le coin (${corner.x}, ${corner.y}), cap (${sx}, ${sy})`);
+      // Il a dépassé le coin, d'un côté ou de l'autre.
+      assert.ok(
+        sx * (p.x - corner.x) > 0.3 || sy * (p.y - corner.y) > 0.3,
+        `pilier non contourné au coin (${corner.x}, ${corner.y}) : arrêt en (${p.x.toFixed(2)}, ${p.y.toFixed(2)})`,
+      );
+    }
+  });
+
+  test('pousser droit dans un mur plat ne fait pas filer de côté', () => {
+    // La glissade d'angle est réservée aux SOMMETS : contre une face, on
+    // s'arrête, on ne dérape pas.
+    const c = new CastleRuntime(plan('open'));
+    const t = floorTiles(c.plan).find(
+      (f) =>
+        c.tiles[idx(f.x, f.y - 1)] === T.WALL &&
+        c.tiles[idx(f.x - 1, f.y - 1)] === T.WALL &&
+        c.tiles[idx(f.x + 1, f.y - 1)] === T.WALL &&
+        c.tiles[idx(f.x - 1, f.y)] === T.FLOOR &&
+        c.tiles[idx(f.x + 1, f.y)] === T.FLOOR,
+    );
+    assert.ok(t, 'aucun mur plat sur trois tuiles dans ce plan');
+    let p = { x: t!.x + 0.5, y: t!.y + 0.5 };
+    for (let k = 0; k < 30; k++) {
+      p = c.moveCircle(p, { x: 0, y: -CFG.invader.baseSpeed * DT }, R, 'invader', 0);
+    }
+    assert.ok(Math.abs(p.x - (t!.x + 0.5)) < 1e-6, `dérive latérale de ${(p.x - t!.x - 0.5).toFixed(4)} tuile`);
+    assert.ok(Math.abs(p.y - (t!.y + R)) < 0.01, 'le joueur ne s’est pas arrêté contre le mur');
+  });
+
+  test('une position déjà prise dans la pierre est dégagée, sans traverser de cloison', () => {
+    const c = new CastleRuntime(plan('compact'));
+    const t = floorTiles(c.plan).find((f) => c.tiles[idx(f.x + 1, f.y)] === T.FLOOR);
+    assert.ok(t);
+    const inside = { x: t!.x + 0.5, y: t!.y + 0.5 };
+    // Un éboulement condamne la dalle sous ses pieds.
+    c.tiles[idx(t!.x, t!.y)] = T.RUBBLE;
+    const out = c.moveCircle(inside, { x: 0.05, y: 0 }, R, 'invader', 0);
+    assert.ok(!c.circleHits(out.x, out.y, R, 'invader', 0), 'le joueur reste emmuré');
+    assert.ok(Math.hypot(out.x - inside.x, out.y - inside.y) < 1.5, 'dégagement trop lointain');
   });
 });
 
