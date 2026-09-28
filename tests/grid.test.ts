@@ -14,7 +14,7 @@ import { CFG, GRID_H, GRID_W } from '../src/game/config';
 import { CastleRuntime, compilePlan, floodRooms, idx, inBounds } from '../src/game/grid';
 import type { Role, TileId, Vec } from '../src/game/types';
 import { T } from '../src/game/types';
-import { floorTiles, makeWorld, plan, PLAN_IDS, rng, run, input } from './helpers';
+import { floorTiles, makeWorld, place, plan, PLAN_IDS, rng, run, input, walkInvaderTo } from './helpers';
 
 const WALKABLE: TileId[] = [T.FLOOR, T.LOW, T.PIT];
 
@@ -244,6 +244,49 @@ describe('collision par expulsion', () => {
     assert.ok(!c.circleHits(out.x, out.y, R, 'invader', 0), 'le joueur reste emmuré');
     assert.ok(Math.hypot(out.x - inside.x, out.y - inside.y) < 1.5, 'dégagement trop lointain');
   });
+});
+
+/* ==================================================================== */
+/* On se rend où l'on veut, à pied, sans rester coincé                   */
+/* ==================================================================== */
+
+describe('les châteaux se parcourent', () => {
+  // Le validateur de plans (`npm run plans`) raisonne sur la grille ; ici on
+  // marche pour de bon : vraie collision, vraies portes d'une tuile, vraie
+  // inertie. Ce test garantit qu'aucun plan ne coince le joueur dans une porte
+  // ou un angle sur le trajet qui compte.
+  //
+  // Il ne juge PAS la lisibilité : les premières Oubliettes le passaient aussi,
+  // un joueur guidé sur le plus court chemin s'y déplaçait sans encombre. C'est
+  // `npm run plans` qui les refuse (virages et longueur du trajet jusqu'au Cœur).
+  for (const id of PLAN_IDS) {
+    test(`${id} : chaque Cœur et chaque brasero s'atteignent en temps raisonnable`, () => {
+      const p = plan(id);
+      const targets = [
+        ...p.heartCandidates.map((v, i) => ({ label: `Cœur #${i}`, at: v })),
+        ...p.brazierSpots.map((v, i) => ({ label: `brasero #${i}`, at: v })),
+      ];
+      for (const t of targets) {
+        const world = makeWorld({ planId: id });
+        // Le Châtelain se tient à l'écart : ici on mesure la marche, pas le combat.
+        place(world.castellan, { x: 1.5, y: 1.5 });
+        place(world.invader, p.invaderSpawn);
+        const field = world.castle.bfsField(t.at, 'invader', 0);
+        const steps = field[Math.floor(p.invaderSpawn.y) * GRID_W + Math.floor(p.invaderSpawn.x)];
+        assert.ok(steps > 0, `${id} : ${t.label} inatteignable`);
+
+        // Marche normale : 3,4 tuiles/s. On tolère 60 % de plus que l'idéal, et
+        // deux secondes pour franchir les portes.
+        const budget = (steps / CFG.invader.baseSpeed) * 1.6 + 2;
+        const arrived = walkInvaderTo(world, t.at, { stopWithin: 0.4, maxSeconds: budget });
+        assert.ok(
+          arrived,
+          `${id} : ${t.label} non atteint en ${budget.toFixed(1)} s (${steps} pas) — ` +
+            `le joueur est resté en (${world.invader.pos.x.toFixed(2)}, ${world.invader.pos.y.toFixed(2)})`,
+        );
+      }
+    });
+  }
 });
 
 /* ==================================================================== */

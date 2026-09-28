@@ -111,6 +111,52 @@ Le tracé transmis masque les passages secrets en murs : la valeur brute les
 aurait livrés à quiconque ouvre l'inspecteur réseau — un défaut qui existait
 déjà dans l'exploration normale, corrigé du même coup.
 
+### 0.8 Les Oubliettes refaites
+
+« Trop difficile à jouer. » Mesuré, ce n'était pas une impression : le plan
+n'était pas dur, il était **illisible**.
+
+| | Avant | Après | Donjon | Grande Salle |
+|---|---|---|---|---|
+| Pire trajet jusqu'au Cœur | 55 pas | **38 pas** | 36 | 26 |
+| Virages sur ce trajet | **27** | **6** | 8 | 5 |
+| Surface jouable | 37 % | 57 % | 60 % | 62 % |
+| Couloirs d'une tuile | 28 % | **4 %** | 22 % | 5 % |
+| Plus longue ligne droite | 6 tuiles | 16 | 22 | 22 |
+
+Un virage tous les deux pas, des couloirs d'une tuile, jamais plus de six tuiles
+de vue : on butait sur chaque angle sans voir venir l'adversaire, et l'on refaisait
+sa visée à chaque pas.
+
+Le nouveau plan garde l'esprit — des cellules, des angles, des portes — mais se
+lit : un **anneau de galeries de deux tuiles** (on s'y croise, l'esquive a la
+place de se faire) autour de **huit cellules** de 2×2 dont la porte ouvre sur la
+galerie, une **salle des gardes** centrale à piliers et murets, et **quatre
+salles d'angle** isolées pour l'apparition et les Cœurs. Les portes sont décalées
+d'une rangée : aucune ligne droite ne traverse le château. Le plan est à symétrie
+d'ordre 4 (un quart de tour le laisse identique) : rien n'avantage un côté, seuls
+les départs et les Cœurs brisent la symétrie. Vingt-deux torches, parce qu'ici la
+lumière est de la lisibilité.
+
+Le validateur de plans (`npm run plans`) mesure désormais ce qui manquait : il
+refuse un trajet de plus de 45 pas ou de plus de 12 virages jusqu'à un candidat
+Cœur. **L'ancien labyrinthe échoue à ces deux contrôles** — vérifié en le
+remettant en place — et les deux autres plans les passent avec de la marge.
+
+Un test de marche à pied (`tests/grid.test.ts`) vérifie en plus, dans la vraie
+simulation, que depuis l'apparition on atteint chaque Cœur et chaque brasero de
+chaque plan en temps raisonnable. Il ne juge pas la lisibilité — l'ancien plan
+le passait aussi : un joueur guidé sur le plus court chemin s'y déplaçait sans
+encombre. Ce sont le validateur et les mesures ci-dessus qui portent la
+différence.
+
+**Ce qui n'est pas validé** : l'équilibre de ce plan. Les robots terminent leurs
+36 manches sans fuite d'information, mais ils jouent trop mal pour dire si le
+Châtelain y est trop fort ou trop faible. Une remarque à vérifier à deux : depuis
+l'apparition, l'Envahisseur est à 21 pas des Cœurs nord-est et sud-ouest, le
+Châtelain à 19 — presque à égalité, là où l'ancien plan donnait 31 contre 24.
+Le Cœur sud-est reste le plus favorable au défenseur (38 pas contre 18).
+
 ---
 
 ## 1. Première passe

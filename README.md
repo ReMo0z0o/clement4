@@ -143,7 +143,7 @@ variables d'environnement du projet Vercel, puis redéployez.
 | `npm run build` | Build de production, types vérifiés |
 | `npm run typecheck` | TypeScript seul |
 | `npm test` | Tests de la simulation, en Node, sans navigateur |
-| `npm run plans` | Valide la topologie des trois châteaux |
+| `npm run plans` | Valide les trois châteaux : topologie, et lisibilité (longueur et virages jusqu'au Cœur) |
 | `npm run playtest` | Fait jouer deux robots des dizaines de manches |
 | `npm run duel` | Vérifie les armes communes, les guets et le Cœur disputé |
 | `npm run netbench` | Fait jouer les deux moteurs derrière un réseau simulé et mesure les recalages |

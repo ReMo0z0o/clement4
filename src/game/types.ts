@@ -70,8 +70,9 @@ export interface PlanSource {
   rows: string[];
   /**
    * Fourchette de surface jouable visée, en fraction de la grille.
-   * Chaque plan a son identité : un labyrinthe doit être dense, une grande
-   * salle doit être aérée. Vérifié par `npm run plans`.
+   * Chaque plan a son identité : la fourchette dit à quel point il est
+   * cloisonné. Elle ne dispense pas d'être lisible — `npm run plans` refuse
+   * aussi un trajet trop long ou trop tortueux jusqu'au Cœur.
    */
   density: [number, number];
 }

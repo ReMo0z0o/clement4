@@ -16,6 +16,11 @@ import type { PlanSource, TileId, Vec } from '../src/game/types';
 
 let failures = 0;
 
+/** Plus long trajet toléré de l'apparition de l'Envahisseur à un candidat Cœur. */
+const MAX_ROUTE_STEPS = 45;
+/** Nombre maximal de virages sur ce trajet. */
+const MAX_ROUTE_TURNS = 12;
+
 function fail(plan: string, msg: string): void {
   console.error(`  ✗ [${plan}] ${msg}`);
   failures++;
@@ -54,6 +59,50 @@ function reachable(tiles: TileId[], from: Vec): Set<number> {
     }
   }
   return seen;
+}
+
+/**
+ * Le plus court chemin à pied, et — à longueur égale — celui qui tourne le moins.
+ *
+ * C'est le trajet que suivrait un joueur qui connaît le plan. Le nombre de
+ * virages dit si le château se JOUE : chacun est un angle à négocier, une visée
+ * à refaire, une embuscade possible. Les Oubliettes premier du nom en
+ * comptaient 27 sur le chemin du Cœur sud-est, un tous les deux pas.
+ */
+function route(tiles: TileId[], from: Vec, to: Vec): { steps: number; turns: number } | null {
+  const D = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  const passable = (x: number, y: number) =>
+    inBounds(x, y) && (tiles[idx(x, y)] === T.FLOOR || tiles[idx(x, y)] === T.DOOR);
+  const start = idx(Math.floor(from.x), Math.floor(from.y));
+  const goal = idx(Math.floor(to.x), Math.floor(to.y));
+  // Coût = pas + 0,001 par virage : la longueur prime, les virages départagent.
+  const best = new Map<number, number>();
+  const key = (i: number, d: number) => i * 5 + d;
+  const queue: [number, number, number][] = [[0, start, 4]];
+  best.set(key(start, 4), 0);
+  while (queue.length) {
+    queue.sort((a, b) => a[0] - b[0]);
+    const [cost, i, d] = queue.shift()!;
+    if (cost > (best.get(key(i, d)) ?? Infinity)) continue;
+    if (i === goal) return { steps: Math.floor(cost), turns: Math.round((cost - Math.floor(cost)) * 1000) };
+    const x = i % GRID_W;
+    const y = Math.floor(i / GRID_W);
+    D.forEach(([dx, dy], nd) => {
+      if (!passable(x + dx, y + dy)) return;
+      const ni = idx(x + dx, y + dy);
+      const nc = cost + 1 + (d !== 4 && d !== nd ? 0.001 : 0);
+      if (nc < (best.get(key(ni, nd)) ?? Infinity)) {
+        best.set(key(ni, nd), nc);
+        queue.push([nc, ni, nd]);
+      }
+    });
+  }
+  return null;
 }
 
 /** Nombre de chemins distincts : on coupe chaque porte et on vérifie l'accès. */
@@ -155,6 +204,28 @@ function validate(src: PlanSource): void {
     }
   });
 
+  // Le château doit se jouer : pas de trajet qui n'en finit pas, pas de zigzag.
+  // Seuils posés au-dessus de ce que font le Donjon (36 pas, 8 virages) et la
+  // Grande Salle (26 pas, 5 virages), et très en dessous de l'ancien labyrinthe
+  // (55 pas, 27 virages), pour que la plainte « impossible à jouer » ne revienne
+  // pas sans que ce script le dise.
+  let worst = { steps: 0, turns: 0 };
+  plan.heartCandidates.forEach((h, i) => {
+    const r = route(plan.tiles, plan.invaderSpawn, h);
+    if (!r) return; // déjà signalé comme inatteignable plus haut
+    if (r.steps > MAX_ROUTE_STEPS) {
+      fail(id, `candidat Cœur #${i} à ${r.steps} pas de l'apparition (max ${MAX_ROUTE_STEPS})`);
+    }
+    if (r.turns > MAX_ROUTE_TURNS) {
+      fail(
+        id,
+        `candidat Cœur #${i} : ${r.turns} virages sur le plus court chemin (max ${MAX_ROUTE_TURNS}) — ` +
+          `un virage tous les ${(r.steps / Math.max(1, r.turns)).toFixed(1)} pas, le plan se lit mal`,
+      );
+    }
+    if (r.steps > worst.steps) worst = r;
+  });
+
   // Les candidats Cœur doivent être écartés : sinon le renseignement est inutile.
   for (let i = 0; i < plan.heartCandidates.length; i++) {
     for (let j = i + 1; j < plan.heartCandidates.length; j++) {
@@ -195,7 +266,7 @@ function validate(src: PlanSource): void {
       id,
       `${plan.roomCount} pièces · ${(ratio * 100).toFixed(0)} % jouable · ` +
         `vue moyenne ${sight.toFixed(1)} tuiles · ${plan.doors.length} portes · ` +
-        `${plan.torches.length} torches`,
+        `${plan.torches.length} torches · pire trajet ${worst.steps} pas / ${worst.turns} virages`,
     );
   }
 }
